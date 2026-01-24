@@ -1,0 +1,170 @@
+name: Build and Release (Multi-Platform)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build Tauri app
+        run: npm run build:tauri
+      
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: src-tauri/target/release/bundle/msi/
+          retention-days: 5
+
+  build-macos:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-apple-darwin
+          - arch: aarch64
+            target: aarch64-apple-darwin
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build Tauri app (${{ matrix.arch }})
+        run: npm run build:tauri
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.13'
+      
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-artifacts
+          path: src-tauri/target/release/bundle/macos/
+          retention-days: 5
+
+  build-linux:
+    name: Build Linux (x64)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libssl-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build Tauri app
+        run: npm run build:tauri
+      
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            src-tauri/target/release/bundle/appimage/
+            src-tauri/target/release/bundle/deb/
+          retention-days: 5
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-bins
+          
+          # Windows
+          cp -r release-artifacts/windows-artifacts/* release-bins/ 2>/dev/null || true
+          
+          # macOS
+          cp -r release-artifacts/macos-x86_64-artifacts/* release-bins/ 2>/dev/null || true
+          cp -r release-artifacts/macos-aarch64-artifacts/* release-bins/ 2>/dev/null || true
+          
+          # Linux
+          cp -r release-artifacts/linux-artifacts/* release-bins/ 2>/dev/null || true
+          
+          # List all assets
+          echo "Release assets:"
+          find release-bins -type f -exec ls -lh {} \;
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          files: release-bins/**/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

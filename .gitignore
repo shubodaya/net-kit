@@ -1,0 +1,155 @@
+# ==========================================
+# Build Artifacts & Dependencies
+# ==========================================
+node_modules/
+dist/
+desktop-dist/
+build/
+.next/
+*.log
+
+# Tauri/Rust Build Output
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/gen/
+src-tauri/.DS_Store
+
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+.env
+.env.local
+.env.*.local
+.env.production.local
+.env.test.local
+
+# ==========================================
+# IDE & Editor Configuration
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-settings
+
+# ==========================================
+# OS Specific Files
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# IDE Temporary Files
+# ==========================================
+.vscode/.history/
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.idea/*.xml
+.idea/workspace.xml
+
+# ==========================================
+# Dependencies Lock Files
+# ==========================================
+# Keep package-lock.json and Cargo.lock for reproducible builds
+# Uncomment if you want to ignore lock files:
+# package-lock.json
+# Cargo.lock
+
+# ==========================================
+# Runtime & Temporary Files
+# ==========================================
+*.pid
+*.seed
+*.pid.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ==========================================
+# Test Coverage
+# ==========================================
+coverage/
+.nyc_output/
+
+# ==========================================
+# Build Output Archives
+# ==========================================
+*.zip
+*.tar.gz
+*.rar
+
+# ==========================================
+# Compiled/Minified Files (generated)
+# ==========================================
+*.min.js
+*.min.css
+
+# ==========================================
+# Backup Files
+# ==========================================
+*.bak
+*.backup
+*.orig
+
+# ==========================================
+# Certificates & Keys (NEVER commit these!)
+# ==========================================
+*.key
+*.pem
+*.p12
+*.pfx
+*.cert
+*.crt
+.env.signing
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+coverage/
+.nyc_output/
+junit.xml
+
+# OS Files
+*.log
+*.pid
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+
+# Executables & Binaries (dist only - not source)
+*.dmg
+*.msi
+*.deb
+*.AppImage
+*.zip
+
+# Generated Files
+src-tauri/gen/schemas/
+
+# Local Development
+.env.development
+dev-dist/

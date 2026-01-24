@@ -1,0 +1,23 @@
+# Cargo build artifacts
+/target/
+Cargo.lock
+
+# Generated schema files
+/gen/schemas/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.log
+
+# Temporary Files
+tmp/
+temp/
+*.tmp

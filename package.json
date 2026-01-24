@@ -1,0 +1,19 @@
+{
+  "name": "cyber-kit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server/server.js",
+    "prepare:desktop": "node scripts/prepare-desktop.mjs",
+    "dev:tauri": "tauri dev",
+    "build:tauri": "tauri build"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6",
+    "serve": "^14.2.3"
+  }
+}
