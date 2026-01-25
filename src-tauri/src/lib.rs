@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use dotenvy::dotenv;
 use printpdf::{BuiltinFont, Mm, PdfDocument};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
@@ -1134,10 +1135,27 @@ async fn run_proxy_request(
   })
 }
 
+#[tauri::command]
+fn firebase_config() -> serde_json::Value {
+  serde_json::json!({
+    "apiKey": std::env::var("FIREBASE_API_KEY").unwrap_or_default(),
+    "authDomain": std::env::var("FIREBASE_AUTH_DOMAIN").unwrap_or_default(),
+    "projectId": std::env::var("FIREBASE_PROJECT_ID").unwrap_or_default(),
+    "storageBucket": std::env::var("FIREBASE_STORAGE_BUCKET").unwrap_or_default(),
+    "messagingSenderId": std::env::var("FIREBASE_MESSAGING_SENDER_ID").unwrap_or_default(),
+    "appId": std::env::var("FIREBASE_APP_ID").unwrap_or_default(),
+    "measurementId": std::env::var("FIREBASE_MEASUREMENT_ID").unwrap_or_default()
+  })
+}
+
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  dotenv().ok();
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
+      firebase_config,
       wifi_scan,
       wifi_report,
       ip_scan_start,

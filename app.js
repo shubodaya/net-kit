@@ -73,20 +73,21 @@ import {
   doc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDCaoEn3UScxzJBKaLb2cfz9kg3RN-cc5M",
-  authDomain: "cyberkit-45cd8.firebaseapp.com",
-  projectId: "cyberkit-45cd8",
-  storageBucket: "cyberkit-45cd8.firebasestorage.app",
-  messagingSenderId: "10176079086",
-  appId: "1:10176079086:web:b9770da89480f6dbe1ffff",
-  measurementId: "G-74E2Y7G3Q0",
-};
+const invoke = getTauriInvoke();
+if (!invoke) {
+  throw new Error("Tauri invoke is unavailable. Run this inside the Tauri desktop app.");
+}
+
+const firebaseConfig = await invoke("firebase_config");
+console.log("firebaseConfig from Rust:", firebaseConfig);
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 const db = getFirestore(app);
+
+window._firebase = { app, auth, provider, db };
+
 const GOOGLE_REDIRECT_KEY = "ck_google_redirect_pending";
 const LOGIN_ACTIVITY_KEY = "ck_login_activity_pending";
 const OFFLINE_MODE_KEY = "ck_offline_mode";
