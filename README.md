@@ -2,7 +2,7 @@
 
 Net Kit is a Windows-first Tauri desktop app that bundles common blue-team tools with a guided assistant (Cipher). It runs fully locally except for optional Firebase auth/storage, and supports speech, templates, and quick exports.
 
-![Net Kit Thumbnail](https://github.com/shubodaya/net-kit/blob/master/net-thumbnail.png)
+[![Net Kit Thumbnail](https://github.com/shubodaya/net-kit/blob/master/net-thumbnail.png)](https://youtu.be/ZeOYa8j2g3k)
 
 ## What you can do (quick tour)
 - **Cipher assistant & Deep Chat**: Onboarding steps, speech playback, mute/stop, and guided flows for each tool. Deep Chat hosts multiple bots (Tool Kit, Command Assist, Incident Triage, Threat Intel, Phishing Analyzer, Compliance Helper).
