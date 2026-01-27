@@ -1,8 +1,8 @@
-import { mkdir, copyFile, cp } from "fs/promises";
+import { mkdir, copyFile, readdir } from "fs/promises";
 import path from "path";
 
 const root = process.cwd();
-const dist = path.join(root, "desktop-dist");
+const dist = path.join(root, "src-tauri", "target", "desktop-dist-build");
 const serverSrc = path.join(root, "server");
 const serverDest = path.join(dist, "server");
 const componentsSrc = path.join(root, "components");
@@ -36,10 +36,24 @@ await Promise.all(
   )
 );
 
-// Copy entire components and data directories
-await cp(componentsSrc, componentsDest, { recursive: true });
+async function copyDirectory(src, dest) {
+  await mkdir(dest, { recursive: true });
+  const entries = await readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectory(srcPath, destPath);
+    } else if (entry.isFile()) {
+      await copyFile(srcPath, destPath);
+    }
+  }
+}
+
+// Copy entire components and data directories without deleting existing files (avoids Windows lock issues)
+await copyDirectory(componentsSrc, componentsDest);
 if (path.resolve(dataSrc) !== path.resolve(dataDest)) {
-  await cp(dataSrc, dataDest, { recursive: true });
+  await copyDirectory(dataSrc, dataDest);
 }
 
 console.log("Desktop assets prepared.");

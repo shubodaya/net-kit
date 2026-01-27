@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cyber Kit</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2303170d'/%3E%3Crect x='6' y='6' width='52' height='52' rx='10' fill='none' stroke='%232cff67' stroke-width='2'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' font-size='26' font-family='Consolas,monospace' fill='%232cff67'%3ECK%3C/text%3E%3C/svg%3E" />
+  <title>Net Kit</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2303170d'/%3E%3Crect x='6' y='6' width='52' height='52' rx='10' fill='none' stroke='%232cff67' stroke-width='2'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' font-size='26' font-family='Consolas,monospace' fill='%232cff67'%3ENK%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body class="auth-mode">
@@ -14,9 +14,9 @@
     <section class="auth" id="authView">
       <div class="panel">
         <div class="brand">
-          <div class="logo">CK</div>
+          <div class="logo">NK</div>
           <div>
-            <h1>Cyber Kit</h1>
+            <h1>Net Kit</h1>
             <p>Secure tools, fast results.</p>
           </div>
         </div>
@@ -53,8 +53,8 @@
         </form>
         <div class="oauth">
           <div class="divider">or</div>
-          <button id="googleAuthBtn" class="ghost oauth-btn" type="button">
-            Sign in with Google
+          <button id="guestLoginBtn" class="ghost oauth-btn" type="button">
+            Continue as guest (limited)
           </button>
         </div>
       </div>
@@ -69,10 +69,14 @@
             <span></span>
           </button>
           <div class="brand small">
-            <div class="logo">CK</div>
+            <div class="logo">NK</div>
             <div>
-              <h2>Cyber Kit</h2>
+              <h2>Net Kit</h2>
               <p id="welcome"></p>
+              <p id="userHandleBadge" class="user-handle-badge" aria-live="polite"></p>
+              <p id="guestNotice" class="guest-notice hidden" aria-live="polite">
+                Guest mode: limited features. Create an account for chat and cloud sync.
+              </p>
             </div>
           </div>
         </div>
@@ -97,13 +101,12 @@
               <path d="M8 9h8M8 12h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
             </svg>
           </button>
-          <button class="ghost icon-btn" id="cipherTopBtn" aria-label="Open Cipher">
+          <button class="ghost icon-btn runbook-btn" id="cipherTopBtn" aria-label="Open Runbook" title="Runbook">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3c3.3 0 6 2.5 6 5.6 0 1.8-.9 3.4-2.4 4.4v2.6l-3-1.4c-.2 0-.4.1-.6.1-3.3 0-6-2.5-6-5.7S8.7 3 12 3z" fill="none" stroke="currentColor" stroke-width="1.6"/>
-              <circle cx="9" cy="9" r="1" fill="currentColor"/>
-              <circle cx="12" cy="9" r="1" fill="currentColor"/>
-              <circle cx="15" cy="9" r="1" fill="currentColor"/>
+              <path d="M5 4h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V6a2 2 0 0 1 2-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M9 4v12l4-2 4 2V4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
             </svg>
+            <span class="runbook-label">Runbook</span>
           </button>
           <div class="notif">
             <button id="notifBtn" class="ghost icon-btn" aria-label="Notifications">
@@ -124,7 +127,7 @@
           </div>
           <div class="profile-menu">
             <button class="ghost profile-btn" id="profileBtn" aria-label="Open profile menu" aria-expanded="false">
-              <span class="profile-initials">CK</span>
+              <span class="profile-initials">NK</span>
             </button>
             <div class="profile-dropdown hidden" id="profileDropdown">
               <button class="ghost" id="profileSettingsBtn">Settings</button>
@@ -390,7 +393,7 @@
                     </svg>
                   </button>
                   <p class="value" id="riskFlagsValue">0</p>
-                  <p class="delta">-1 since last</p>
+                  <p class="delta" id="riskFlagsDetail">Incorrect login attempts</p>
                 </div>
                 <div class="overview-card">
                   <p class="label">Reports</p>
@@ -552,7 +555,7 @@
               <button class="ghost" id="wifiReportBtn" type="button">Generate report</button>
             </div>
             <div class="result" id="wifiStatus">Ready to scan.</div>
-            <p class="note">Chart refreshes every 5 seconds while this tool is open.</p>
+            <p class="note">Run a scan to refresh the chart.</p>
             <div class="wifi-charts">
               <div class="wifi-chart">
                 <div class="wifi-chart-title">2.4 GHz channels</div>
@@ -706,11 +709,19 @@
                   <circle cx="16" cy="15" r="1.2" fill="currentColor"/>
                 </svg>
               </span>
-              Packet capture (prototype)
+              Packet capture
+              <button id="pcapInfoBtn" type="button" class="pcap-info-btn" aria-label="Packet capture requirements" aria-expanded="false">i</button>
             </h3>
-            <p class="muted">
-              Live-ish packet stream with protocol filters. Real capture requires the desktop app with elevated privileges; this view simulates traffic so you can prototype filters and layout.
-            </p>
+            <p class="muted">Real-time capture with Npcap. Requires Npcap installed and admin privileges. Click “i” for setup steps.</p>
+            <div id="pcapInfoPanel" class="pcap-info-panel" hidden>
+              <strong>Packet capture prerequisites</strong>
+              <ul>
+                <li>Install Npcap (driver) from nmap.org, or use the bundled installer when prompted.</li>
+                <li>Run Net Kit as Administrator to allow driver access.</li>
+                <li>If TShark is present, it is used as fallback; otherwise capture uses Npcap directly.</li>
+                <li>If no interfaces appear, click “Refresh interfaces”, ensure Npcap is installed, and restart the app.</li>
+              </ul>
+            </div>
             <label>
               Session
               <select class="tool-session" data-tool="pcap"></select>
@@ -718,11 +729,19 @@
             <div class="pcap-toolbar">
               <label>
                 Interface
-                <input type="text" id="pcapInterface" placeholder="auto (e.g., Wi-Fi, eth0, any)" />
+                <select id="pcapInterfaceSelect">
+                  <option value="auto">auto (any available interface)</option>
+                </select>
               </label>
+              <button class="ghost" id="pcapRefreshBtn" type="button" title="Refresh interfaces" aria-label="Refresh interfaces">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M12 7v5l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
               <label>
-                Display filter (proto/host/port text)
-                <input type="text" id="pcapFilterInput" placeholder="e.g., tcp port 443 or tls" />
+                Capture filter (BPF)
+                <input type="text" id="pcapFilterInput" placeholder="e.g., tcp port 443 or host 8.8.8.8" />
               </label>
             </div>
             <div class="pcap-filters">
@@ -759,8 +778,19 @@
               <button class="primary" id="pcapStartBtn" type="button">Start capture</button>
               <button class="ghost" id="pcapStopBtn" type="button">Stop</button>
               <button class="ghost" id="pcapClearBtn" type="button">Clear</button>
+              <div class="pcap-export-group">
+                <select id="pcapExportFormat">
+                  <option value="pcapng">pcapng</option>
+                  <option value="pcap">pcap</option>
+                  <option value="json">json</option>
+                  <option value="csv">csv</option>
+                </select>
+                <button class="ghost" id="pcapExportBtn" type="button">Export</button>
+              </div>
+              <button class="ghost" id="pcapSaveBtn" type="button">Save capture</button>
+              <button class="ghost" id="pcapViewSavedBtn" type="button">View saved captures</button>
             </div>
-            <div class="result" id="pcapStatus">Ready to capture. Simulated traffic until wired to a native capture backend.</div>
+            <div class="result" id="pcapStatus">Native capture ready. Pick an interface and click Start.</div>
             <div class="pcap-stats" id="pcapStats"></div>
             <div class="pcap-feed" id="pcapFeed"></div>
           </div>
@@ -1213,10 +1243,12 @@
   </main>
   <button class="cipher-toggle" id="cipherToggle">
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 3c3.3 0 6 2.5 6 5.6 0 1.8-.9 3.4-2.4 4.4v2.6l-3-1.4c-.2 0-.4.1-.6.1-3.3 0-6-2.5-6-5.7S8.7 3 12 3z" fill="none" stroke="currentColor" stroke-width="1.6"/>
-      <circle cx="9" cy="9" r="1" fill="currentColor"/>
-      <circle cx="12" cy="9" r="1" fill="currentColor"/>
-      <circle cx="15" cy="9" r="1" fill="currentColor"/>
+      <rect x="5" y="6" width="14" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M9 6V4a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="10" cy="11" r="1.2" fill="currentColor"/>
+      <circle cx="14" cy="11" r="1.2" fill="currentColor"/>
+      <path d="M9 15h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M12 18v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
     Cipher
   </button>
@@ -1227,57 +1259,61 @@
         <span class="muted"></span>
       </div>
       <div class="cipher-actions">
+        <button class="chip" id="cipherAutoBtn" type="button">Auto-popup: On</button>
         <button class="chip" id="cipherCloseBtn">Close</button>
       </div>
     </div>
     <div class="cipher-body" id="cipherBody"></div>
     <div class="cipher-controls">
       <button class="chip" id="cipherSpeakBtn" type="button">Speak</button>
+      <button
+        class="chip mute-tts-btn"
+        id="cipherMuteBtn"
+        aria-pressed="false"
+        title="Mute"
+        aria-label="Mute"
+        type="button"
+      >
+        <span class="mute-icon" aria-hidden="true">🔇</span>
+        <span class="unmute-icon hidden" aria-hidden="true">🔈</span>
+        <span class="mute-label">Mute</span>
+      </button>
       <button class="chip" id="cipherNextBtn">Next</button>
       <button class="chip" id="cipherRestartBtn">Restart</button>
-      <button class="chip" id="cipherAiBtn">Deep chat</button>
+      <button class="chip" id="cipherAiBtn">Runbook</button>
     </div>
   </div>
   <div class="cipher-deep hidden" id="cipherDeepPanel">
-    <div class="cipher-deep-header">
-      <div class="cipher-deep-header-left">
-        <div class="cipher-bots inline">
-          <button class="ghost" data-bot="toolkit">Tool Kit</button>
-          <button class="ghost" data-bot="commands">Command Assist</button>
-          <button class="ghost" data-bot="triage">Incident Triage</button>
-          <button class="ghost" data-bot="intel">Threat Intel Summary</button>
-          <button class="ghost" data-bot="phishing">Phishing Analyzer</button>
-          <button class="ghost" data-bot="compliance">Compliance Helper</button>
+      <div class="cipher-deep-header">
+        <div class="cipher-deep-header-left">
+          <div class="cipher-bots inline">
+            <button class="ghost" data-bot="toolkit">Tool Kit</button>
+            <button class="ghost" data-bot="commands">Command Assist</button>
+            <button class="ghost" data-bot="triage">Incident Triage</button>
+            <button class="ghost" data-bot="intel">Threat Intel Summary</button>
+            <button class="ghost" data-bot="phishing">Phishing Analyzer</button>
+            <button class="ghost" data-bot="compliance">Compliance Helper</button>
+          </div>
+        </div>
+        <div class="cipher-deep-header-right">
+          <button class="chip" id="cipherDeepCloseBtn">Close</button>
         </div>
       </div>
-      <div class="cipher-deep-header-right">
-        <button class="chip" id="cipherDeepClearBtn" title="Clear current tool state" aria-label="Clear tool">Clear</button>
-        <button class="ghost icon-btn" id="muteTtsBtn" title="Mute text-to-speech" aria-label="Mute TTS">
-          <svg viewBox="0 0 24 24" aria-hidden="true" class="mute-icon">
-            <path d="M3 9v6c0 .6.4 1 1 1h4l5 5V4l-5 5H4c-.6 0-1 .4-1 1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <svg viewBox="0 0 24 24" aria-hidden="true" class="unmute-icon hidden">
-            <path d="M3 9v6c0 .6.4 1 1 1h4l5 5V4l-5 5H4c-.6 0-1 .4-1 1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M19 14a4 4 0 0 0-7-2.5M17.5 5.5a8 8 0 0 1 5.3 7.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-            <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-          </svg>
-        </button>
-        <button class="chip" id="cipherDeepCloseBtn">Close</button>
-      </div>
-    </div>
-    <div class="cipher-deep-layout">
-      <aside class="cipher-deep-sidebar">
-        <button class="primary" id="cipherNewChatBtn">New chat</button>
-        <div class="cipher-chat-list" id="cipherChatList"></div>
-      </aside>
-      <section class="cipher-deep-main">
-        <div class="cipher-deep-body" id="cipherDeepBody"></div>
-        <div class="cipher-avatar" id="cipherAvatar">
-          <!-- Bot display removed - tools now use integrated panels in topbar -->
+      <div class="cipher-deep-layout">
+        <aside class="cipher-deep-sidebar">
+          <button class="primary" id="cipherNewChatBtn">New chat</button>
+          <div class="cipher-chat-list" id="cipherChatList"></div>
+        </aside>
+        <section class="cipher-deep-main">
+        <div class="stop-speech-fab">
+          <div class="speech-chip-row">
+          </div>
         </div>
-        <div class="cipher-deep-controls">
-          <!-- Speech is controlled globally by mute button in topbar -->
-        </div>
+          <div class="cipher-deep-body" id="cipherDeepBody"></div>
+          <div class="cipher-avatar" id="cipherAvatar">
+            <!-- Bot display removed - tools now use integrated panels in topbar -->
+          </div>
+          <div class="cipher-deep-controls"></div>
       </section>
     </div>
   </div>
@@ -1302,6 +1338,20 @@
         </div>
       </div>
       <div class="notif-list" id="notifModalList"></div>
+    </div>
+  </div>
+  <div class="activity-modal hidden" id="pcapSavedModal" role="dialog" aria-modal="true">
+    <div class="activity-modal-content pcap-saved-modal">
+      <div class="panel-head">
+        <h4>Saved captures</h4>
+        <div class="modal-actions">
+          <button class="chip" id="pcapSavedCheckAllBtn" type="button">Check all</button>
+          <button class="chip" id="pcapSavedUncheckAllBtn" type="button">Uncheck all</button>
+          <button class="chip danger" id="pcapSavedDeleteBtn" type="button">Delete selected</button>
+          <button class="chip" id="pcapSavedCloseBtn" type="button">Close</button>
+        </div>
+      </div>
+      <div class="pcap-saved-list" id="pcapSavedList"></div>
     </div>
   </div>
   <div class="activity-modal hidden" id="promptModal" role="dialog" aria-modal="true">

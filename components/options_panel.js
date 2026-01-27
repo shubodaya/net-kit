@@ -74,9 +74,9 @@ function renderToolIntro(container, tool) {
   const introDiv = document.createElement("div");
   introDiv.className = "options-intro";
   introDiv.style.cssText = `
-    padding: 12px 0;
-    border-bottom: 1px solid var(--edge, #ccc);
-    margin-bottom: 8px;
+    padding: 12px 0 4px 0;
+    margin-bottom: 0;
+    border-bottom: none;
   `;
 
   introDiv.innerHTML = `
@@ -224,6 +224,8 @@ function renderOptionSelection(container, toolId, categoryId, onSelectOption, on
         optionId: option.id,
         label: option.label,
         template: option.template,
+        info: option.info || option.description || "",
+        example: option.example || "",
       });
     });
 

@@ -376,6 +376,19 @@ button.disabled {
   text-overflow: ellipsis;
 }
 
+.user-handle-badge {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.guest-notice {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: #ffb3a4;
+}
+
 .menu-toggle {
   display: none;
   align-items: center;
@@ -520,6 +533,24 @@ button.disabled {
 .icon-btn svg {
   width: 18px;
   height: 18px;
+}
+
+.runbook-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.runbook-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.runbook-label {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
 
 .terminal-btn {
@@ -1015,8 +1046,43 @@ button.disabled {
 
 .pcap-toolbar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 10px;
+  grid-template-columns: 1.2fr auto 1.1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+#pcapRefreshBtn {
+  height: 38px;
+  width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#pcapExportFormat {
+  height: 38px;
+  background: rgba(2, 20, 11, 0.9);
+  border: 1px solid var(--edge);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.pcap-export-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#pcapInterfaceList {
+  display: none !important;
+}
+
+.mute-tts-btn.muted {
+  background: #10e08c;
+  color: #01210f;
+  border-color: #0dcf7d;
 }
 
 .pcap-filters {
@@ -1084,6 +1150,178 @@ button.disabled {
   background: rgba(2, 20, 11, 0.92);
   max-height: 340px;
   display: grid;
+}
+.pcap-info-btn {
+  margin-left: 8px;
+  height: 26px;
+  width: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--edge);
+  background: rgba(2, 20, 11, 0.9);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+.pcap-info-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(44, 255, 103, 0.35);
+}
+.pcap-info-panel {
+  margin: 8px 0 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: rgba(2, 20, 11, 0.85);
+  font-size: 12px;
+}
+.pcap-info-panel ul {
+  padding-left: 18px;
+  margin: 6px 0;
+}
+
+.pcap-saved-modal {
+  max-width: 720px;
+}
+
+.pcap-saved-list {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(2, 20, 11, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pcap-saved-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+}
+
+.pcap-saved-row .meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pcap-saved-row .label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pcap-saved-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.triage-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.triage-saved-row {
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(2, 20, 11, 0.85);
+}
+
+.triage-saved-row .label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.triage-saved-row .meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.triage-saved-card {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(2, 20, 11, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.triage-saved-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.pcap-interface-list {
+  margin-top: 10px;
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  padding: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: rgba(6, 20, 12, 0.3);
+  min-height: 0;
+  scrollbar-width: none;
+}
+
+.pcap-interface-list:empty {
+  display: none;
+}
+
+.pcap-interface-list::-webkit-scrollbar {
+  display: none;
+}
+
+.pcap-interface-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.pcap-interface-row:hover {
+  background: rgba(44, 255, 103, 0.08);
+  color: var(--ink);
+}
+
+.pcap-interface-row.active {
+  background: rgba(44, 255, 103, 0.16);
+  color: var(--ink);
+}
+
+.pcap-iface-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: inherit;
+}
+
+.pcap-iface-desc {
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.8;
 }
 
 .pcap-row {
@@ -1507,12 +1745,110 @@ button.disabled {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
+  color: var(--ink);
 }
 
 .chip.active {
   background: var(--accent);
   color: #03170d;
   border-color: transparent;
+}
+
+/* Make mute state visually obvious */
+.chip.mute-tts-btn.muted {
+  background: #10e08c;
+  color: #01210f;
+  border-color: #0dcf7d;
+  box-shadow: 0 0 0 2px rgba(16, 224, 140, 0.25);
+}
+
+.triage-workpad {
+  width: 100%;
+  min-height: 220px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: rgba(2, 20, 11, 0.9);
+  color: var(--ink);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.triage-form {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(2, 20, 11, 0.8);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.triage-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.triage-form-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.triage-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.triage-field input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: rgba(3, 25, 14, 0.9);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.triage-field textarea,
+.triage-field select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: rgba(3, 25, 14, 0.9);
+  color: var(--ink);
+  font-size: 12px;
+  width: 100%;
+}
+
+.triage-field textarea {
+  min-height: 90px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.triage-field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.triage-field.checkbox input {
+  width: 16px;
+  height: 16px;
+}
+
+/* Avoid double divider under Incident Triage forms */
+.triage-form + .cipher-footer-controls {
+  border-top: none;
+  padding-top: 8px;
+  margin-top: 8px;
 }
 
 .overview-cards {
@@ -1958,6 +2294,11 @@ button.disabled {
   margin: 12px 0 16px;
 }
 
+/* Preserve line breaks inside prompt messages (used by tool info popups) */
+.prompt-body p {
+  white-space: pre-line;
+}
+
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -2154,9 +2495,60 @@ body.auth-mode .cipher-deep {
 
 .cipher-deep-header-right {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.stop-speak-button {
+  align-self: center;
+}
+
+.stop-speech-fab {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.speech-chip-row {
+  display: flex;
+  gap: 8px;
+}
+
+.stop-speak-button {
+  display: none;
+}
+
+.speech-chip-row .stop-speak-button {
+  display: inline-flex;
+}
+
+.cipher-footer-controls .stop-speak-button {
+  display: none !important;
+}
+
+.mute-tts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mute-tts-btn .unmute-icon {
+  display: none;
+}
+
+.mute-tts-btn.muted .mute-icon {
+  display: none;
+}
+
+.mute-tts-btn.muted .unmute-icon {
+  display: inline;
+}
+
+.mute-tts-btn.muted {
+  opacity: 0.55;
 }
 
 .cipher-deep-layout {
@@ -2204,24 +2596,8 @@ body.auth-mode .cipher-deep {
   text-align: center;
 }
 
-#muteTtsBtn {
-  position: relative;
-}
-
-#muteTtsBtn .unmute-icon {
+.cipher-deep-controls {
   display: none;
-}
-
-#muteTtsBtn.muted .mute-icon {
-  display: none;
-}
-
-#muteTtsBtn.muted .unmute-icon {
-  display: block;
-}
-
-#muteTtsBtn.muted {
-  opacity: 0.5;
 }
 
 .cipher-chat-list {
@@ -2313,6 +2689,7 @@ body.auth-mode .cipher-deep {
   display: grid;
   grid-template-rows: 1fr auto;
   min-height: 0;
+  position: relative;
 }
 
 .cipher-deep-body {

@@ -6,10 +6,14 @@ use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime;
 use tauri::Emitter;
+use tauri::Manager;
+use pcap::{Capture, Device};
 use std::collections::HashSet;
-use std::io::BufWriter;
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::process::Command;
+use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -98,10 +102,46 @@ struct ProxyResponse {
   body: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct PcapPacketEvent {
+  time: String,
+  src: String,
+  dest: String,
+  protocol: String,
+  length: usize,
+  info: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct HoneyEvent {
+  message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PcapInterface {
+  name: String,
+  description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NpcapStatus {
+  installed: bool,
+  just_installed: bool,
+  message: Option<String>,
+  installer_path: Option<String>,
+}
+
 static IP_SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static IP_SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
 static PORT_SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static PORT_SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
+static PCAP_RUNNING: AtomicBool = AtomicBool::new(false);
+static PCAP_CANCEL: AtomicBool = AtomicBool::new(false);
+static PCAP_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+static TSHARK_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+static HONEY_RUNNING: AtomicBool = AtomicBool::new(false);
+static HONEY_CANCEL: AtomicBool = AtomicBool::new(false);
+static HONEY_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
 fn unix_timestamp() -> u64 {
   SystemTime::now()
@@ -1135,16 +1175,870 @@ async fn run_proxy_request(
   })
 }
 
+fn format_ipv4(bytes: &[u8]) -> Option<String> {
+  if bytes.len() < 4 {
+    None
+  } else {
+    Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]).to_string())
+  }
+}
+
+fn format_ipv6(bytes: &[u8]) -> Option<String> {
+  if bytes.len() < 16 {
+    None
+  } else {
+    let mut buf = [0u8; 16];
+    buf.copy_from_slice(&bytes[..16]);
+    Some(Ipv6Addr::from(buf).to_string())
+  }
+}
+
+fn summarize_packet(data: &[u8]) -> PcapPacketEvent {
+  let length = data.len();
+  let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+  if data.len() < 14 {
+    return PcapPacketEvent {
+      time: timestamp,
+      src: "unknown".to_string(),
+      dest: "unknown".to_string(),
+      protocol: "RAW".to_string(),
+      length,
+      info: "Frame too short".to_string(),
+    };
+  }
+  let ethertype = u16::from_be_bytes([data[12], data[13]]);
+  match ethertype {
+    0x0800 => {
+      let ihl_bytes = ((data[14] & 0x0f) as usize) * 4;
+      let proto = data.get(23).cloned().unwrap_or(0);
+      let src = format_ipv4(&data.get(26..30).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let dest = format_ipv4(&data.get(30..34).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let l4_offset = 14 + ihl_bytes;
+      let ports = if data.len() >= l4_offset + 4 {
+        let sport = u16::from_be_bytes([data[l4_offset], data[l4_offset + 1]]);
+        let dport = u16::from_be_bytes([data[l4_offset + 2], data[l4_offset + 3]]);
+        Some((sport, dport))
+      } else {
+        None
+      };
+      let (protocol, info) = match proto {
+        6 => ("TCP", ports.map(|(s, d)| format!("{s} -> {d}")).unwrap_or_else(|| "TCP".to_string())),
+        17 => ("UDP", ports.map(|(s, d)| format!("{s} -> {d}")).unwrap_or_else(|| "UDP".to_string())),
+        1 => ("ICMP", "ICMP".to_string()),
+        132 => ("SCTP", ports.map(|(s, d)| format!("{s} -> {d}")).unwrap_or_else(|| "SCTP".to_string())),
+        50 => ("ESP", "ESP".to_string()),
+        51 => ("AH", "AH".to_string()),
+        _ => ("IPv4", format!("Protocol {proto}")),
+      };
+      PcapPacketEvent {
+        time: timestamp,
+        src,
+        dest,
+        protocol: protocol.to_string(),
+        length,
+        info,
+      }
+    }
+    0x86DD => {
+      let next = data.get(20).cloned().unwrap_or(0);
+      let src = format_ipv6(&data.get(22..38).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let dest = format_ipv6(&data.get(38..54).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let (protocol, info) = match next {
+        6 => ("TCP", "TCP".to_string()),
+        17 => ("UDP", "UDP".to_string()),
+        58 => ("ICMPv6", "ICMPv6".to_string()),
+        _ => ("IPv6", format!("Next header {next}")),
+      };
+      PcapPacketEvent {
+        time: timestamp,
+        src,
+        dest,
+        protocol: protocol.to_string(),
+        length,
+        info,
+      }
+    }
+    0x0806 => {
+      let src = format_ipv4(&data.get(28..32).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let dest = format_ipv4(&data.get(38..42).unwrap_or(&[])).unwrap_or_else(|| "unknown".to_string());
+      let op = u16::from_be_bytes([data.get(20).cloned().unwrap_or(0), data.get(21).cloned().unwrap_or(0)]);
+      let info = match op {
+        1 => "Who has? (request)",
+        2 => "Reply",
+        _ => "ARP",
+      };
+      PcapPacketEvent {
+        time: timestamp,
+        src,
+        dest,
+        protocol: "ARP".to_string(),
+        length,
+        info: info.to_string(),
+      }
+    }
+    _ => PcapPacketEvent {
+      time: timestamp,
+      src: "unknown".to_string(),
+      dest: "unknown".to_string(),
+      protocol: format!("0x{ethertype:04x}"),
+      length,
+      info: "Unrecognized EtherType".to_string(),
+    },
+  }
+}
+
+fn build_protocol_filter(protocols: &[String]) -> Option<String> {
+  let mut clauses = Vec::new();
+  for proto in protocols {
+    match proto.to_lowercase().as_str() {
+      "tcp" => clauses.push("tcp".to_string()),
+      "udp" => clauses.push("udp".to_string()),
+      "icmp" => clauses.push("icmp or icmp6".to_string()),
+      "arp" => clauses.push("arp".to_string()),
+      "dns" => clauses.push("(udp port 53 or tcp port 53)".to_string()),
+      _ => {}
+    }
+  }
+  if clauses.is_empty() {
+    None
+  } else {
+    Some(clauses.join(" or "))
+  }
+}
+
+fn honey_banner(profile: &str) -> Vec<u8> {
+  match profile.to_lowercase().as_str() {
+    "ssh" => b"SSH-2.0-OpenSSH_8.9p1\r\n".to_vec(),
+    "rdp" => b"\x03\x00\x00\x0b\x06\xd0\x00\x00\x12\x34\x00".to_vec(),
+    "ftp" => b"220 ProFTPD 1.3.6 Server ready\r\n".to_vec(),
+    "telnet" => b"Welcome to Embedded Telnet\r\nlogin: ".to_vec(),
+    "database" => b"-ERR invalid protocol\r\n".to_vec(),
+    _ => b"HTTP/1.1 200 OK\r\nServer: Apache/2.4.57\r\nContent-Type: text/html\r\nContent-Length: 20\r\n\r\nService available.\r\n".to_vec(),
+  }
+}
+
+fn honey_profile_label(profile: &str) -> &str {
+  match profile.to_lowercase().as_str() {
+    "ssh" => "SSH",
+    "rdp" => "RDP",
+    "ftp" => "FTP",
+    "telnet" => "TELNET",
+    "database" => "DB",
+    _ => "WEB",
+  }
+}
+
+fn start_honeypot_listener(app: tauri::AppHandle, port: u16, profile: String) -> Result<(), String> {
+  let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|err| err.to_string())?;
+  listener
+    .set_nonblocking(true)
+    .map_err(|err| err.to_string())?;
+  let banner = honey_banner(&profile);
+  let label = honey_profile_label(&profile).to_string();
+  let handle = thread::spawn(move || {
+    let _ = app.emit("honey_status", format!("Honeypot active ({label} on port {port})"));
+    loop {
+      if HONEY_CANCEL.load(Ordering::SeqCst) {
+        break;
+      }
+      match listener.accept() {
+        Ok((mut stream, addr)) => {
+          let _ = stream.write_all(&banner);
+          let _ = stream.flush();
+          let msg = format!("Connection from {addr} on port {port} ({label})");
+          let _ = app.emit("honey_event", HoneyEvent { message: msg.clone() });
+          let _ = app.emit("honey_status", format!("Recorded probe: {msg}"));
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+          thread::sleep(Duration::from_millis(100));
+          continue;
+        }
+        Err(err) => {
+          let _ = app.emit("honey_error", format!("Honeypot error: {err}"));
+          break;
+        }
+      }
+    }
+    let _ = app.emit("honey_status", "Honeypot stopped.");
+    HONEY_RUNNING.store(false, Ordering::SeqCst);
+  });
+  if let Ok(mut guard) = HONEY_THREAD.lock() {
+    *guard = Some(handle);
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn honeypot_start(app: tauri::AppHandle, port: u16, profile: Option<String>) -> Result<(), String> {
+  if HONEY_RUNNING.swap(true, Ordering::SeqCst) {
+    return Err("Honeypot already running.".to_string());
+  }
+  HONEY_CANCEL.store(false, Ordering::SeqCst);
+  let prof = profile.unwrap_or_else(|| "web".to_string());
+  if let Err(err) = start_honeypot_listener(app.clone(), port, prof) {
+    HONEY_RUNNING.store(false, Ordering::SeqCst);
+    return Err(err);
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn honeypot_stop(app: tauri::AppHandle) -> Result<(), String> {
+  HONEY_CANCEL.store(true, Ordering::SeqCst);
+  if let Ok(mut guard) = HONEY_THREAD.lock() {
+    if let Some(handle) = guard.take() {
+      let _ = handle.join();
+    }
+  }
+  HONEY_RUNNING.store(false, Ordering::SeqCst);
+  let _ = app.emit("honey_status", "Honeypot stopped.");
+  Ok(())
+}
+
+#[cfg(target_os = "windows")]
+const NPCAP_INSTALLER_NAME: &str = "npcap-1.86.exe";
+
+fn npcap_present() -> bool {
+  #[cfg(not(target_os = "windows"))]
+  {
+    return true;
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let sys32 = PathBuf::from(&windir).join("System32");
+    let npcap_dir = sys32.join("Npcap");
+    let wow_dir = PathBuf::from(&windir).join("SysWOW64").join("Npcap");
+    let drivers_dir = sys32.join("drivers");
+    let dll_pairs = [
+      (npcap_dir.join("wpcap.dll"), npcap_dir.join("Packet.dll")),
+      (wow_dir.join("wpcap.dll"), wow_dir.join("Packet.dll")),
+    ];
+    let has_pairs = dll_pairs.iter().any(|(wpcap, packet)| wpcap.exists() && packet.exists());
+    if has_pairs {
+      return true;
+    }
+    let extra = [
+      drivers_dir.join("npcap.sys"),
+      drivers_dir.join("npf.sys"),
+      npcap_dir.join("wpcap.dll"),
+      npcap_dir.join("Packet.dll"),
+      wow_dir.join("wpcap.dll"),
+      wow_dir.join("Packet.dll"),
+    ];
+    extra.iter().any(|path| path.exists())
+  }
+}
+
+#[cfg(target_os = "windows")]
+fn find_npcap_installer(app: &tauri::AppHandle) -> Option<PathBuf> {
+  let mut candidates: Vec<PathBuf> = Vec::new();
+  if let Ok(dir) = app.path().resource_dir() {
+    candidates.push(dir.join(NPCAP_INSTALLER_NAME));
+    candidates.push(dir.join("resources").join(NPCAP_INSTALLER_NAME));
+  }
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      candidates.push(dir.join(NPCAP_INSTALLER_NAME));
+    }
+  }
+  if let Ok(cwd) = std::env::current_dir() {
+    candidates.push(cwd.join(NPCAP_INSTALLER_NAME));
+    if let Some(parent) = cwd.parent() {
+      candidates.push(parent.join(NPCAP_INSTALLER_NAME));
+    }
+  }
+  candidates.into_iter().find(|path| path.exists())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn find_npcap_installer(_app: &tauri::AppHandle) -> Option<PathBuf> {
+  None
+}
+
+fn ensure_npcap_installed(app: &tauri::AppHandle) -> Result<NpcapStatus, String> {
+  #[cfg(not(target_os = "windows"))]
+  {
+    return Ok(NpcapStatus {
+      installed: true,
+      just_installed: false,
+      message: Some("libpcap available (non-Windows).".to_string()),
+      installer_path: None,
+    });
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    if npcap_present() {
+      return Ok(NpcapStatus {
+        installed: true,
+        just_installed: false,
+        message: Some("Npcap detected.".to_string()),
+        installer_path: None,
+      });
+    }
+    let _ = app.emit("pcap_status", "Npcap not detected. Installing bundled Npcap...");
+    let installer = find_npcap_installer(app).ok_or_else(|| {
+      "Npcap installer not found. Place npcap-1.86.exe next to the app or install Npcap manually."
+        .to_string()
+    })?;
+    let status = Command::new(&installer)
+      .args(["/S"])
+      .status()
+      .map_err(|err| format!("Unable to start Npcap installer: {err}"))?;
+    if !status.success() {
+      return Err(format!(
+        "Npcap installer exited with code {:?}. Run the app as Administrator and try again.",
+        status.code()
+      ));
+    }
+    for _ in 0..10 {
+      if npcap_present() {
+        let _ = app.emit("pcap_status", "Npcap installed. Reloading interfaces...");
+        return Ok(NpcapStatus {
+          installed: true,
+          just_installed: true,
+          message: Some("Npcap installed successfully.".to_string()),
+          installer_path: Some(installer.to_string_lossy().to_string()),
+        });
+      }
+      thread::sleep(Duration::from_millis(500));
+    }
+    Err("Npcap installer ran but Npcap is still unavailable. Reboot or install manually.".to_string())
+  }
+}
+
+#[tauri::command]
+fn ensure_npcap(app: tauri::AppHandle) -> Result<NpcapStatus, String> {
+  ensure_npcap_installed(&app)
+}
+
+#[tauri::command]
+fn pcap_interfaces(app: tauri::AppHandle) -> Result<Vec<PcapInterface>, String> {
+  let status = ensure_npcap_installed(&app)?;
+  if !status.installed {
+    return Err(status.message.unwrap_or_else(|| "Npcap not available.".to_string()));
+  }
+  if tshark_available() {
+    if let Ok(interfaces) = tshark_interfaces() {
+      if !interfaces.is_empty() {
+        return Ok(interfaces);
+      }
+    }
+  }
+  let devices = Device::list().map_err(|err| err.to_string())?;
+  Ok(
+    devices
+      .into_iter()
+      .map(|dev| PcapInterface {
+        name: dev.name,
+        description: dev.desc,
+      })
+      .collect(),
+  )
+}
+
+#[tauri::command]
+fn pcap_stop(app: tauri::AppHandle) -> Result<(), String> {
+  PCAP_CANCEL.store(true, Ordering::SeqCst);
+  if let Ok(mut guard) = TSHARK_CHILD.lock() {
+    if let Some(mut child) = guard.take() {
+      let _ = child.kill();
+      let _ = child.wait();
+    }
+  }
+  if let Ok(mut handle_guard) = PCAP_THREAD.lock() {
+    if let Some(handle) = handle_guard.take() {
+      let _ = handle.join();
+    }
+  }
+  PCAP_RUNNING.store(false, Ordering::SeqCst);
+  let _ = app.emit("pcap_status", "Capture stopped.");
+  Ok(())
+}
+
+#[tauri::command]
+fn pcap_start(
+  app: tauri::AppHandle,
+  interface: Option<String>,
+  protocols: Option<Vec<String>>,
+  bpf_filter: Option<String>,
+) -> Result<(), String> {
+  let npcap = ensure_npcap_installed(&app)?;
+  if !npcap.installed {
+    return Err(npcap.message.unwrap_or_else(|| "Npcap not available.".to_string()));
+  }
+  if PCAP_RUNNING.swap(true, Ordering::SeqCst) {
+    return Err("Capture already running.".to_string());
+  }
+  let fail = |message: String| -> Result<(), String> {
+    PCAP_RUNNING.store(false, Ordering::SeqCst);
+    Err(message)
+  };
+  PCAP_CANCEL.store(false, Ordering::SeqCst);
+  let proto_filters = protocols.unwrap_or_default();
+  let combined_filter = {
+    let proto_clause = build_protocol_filter(&proto_filters);
+    let user_clause = bpf_filter.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty());
+    match (proto_clause, user_clause) {
+      (Some(p), Some(u)) => Some(format!("{p} and ({u})")),
+      (Some(p), None) => Some(p),
+      (None, Some(u)) => Some(u.to_string()),
+      _ => None,
+    }
+  };
+
+  let device = if let Some(name) = interface.as_ref().filter(|v| !v.trim().is_empty()) {
+    match Capture::from_device(name.as_str()) {
+      Ok(value) => value,
+      Err(err) => return fail(err.to_string()),
+    }
+  } else {
+    let default_dev = match Device::lookup() {
+      Ok(value) => value,
+      Err(err) => return fail(err.to_string()),
+    };
+    let default_dev = match default_dev {
+      Some(value) => value,
+      None => return fail("No default capture interface found.".to_string()),
+    };
+    match Capture::from_device(default_dev) {
+      Ok(value) => value,
+      Err(err) => return fail(err.to_string()),
+    }
+  };
+  let mut cap = match device.promisc(true).snaplen(65535).timeout(1000).open() {
+    Ok(cap) => cap,
+    Err(err) => {
+      // If pcap open fails and tshark is available, try tshark as a fallback
+      if tshark_available() {
+        let fallback_iface = interface.clone().unwrap_or_else(|| "auto".to_string());
+        if let Err(t_err) = start_tshark_capture(app, fallback_iface, combined_filter) {
+          return fail(format!("Unable to open capture: {err}. TShark fallback also failed: {t_err}"));
+        }
+        return Ok(());
+      }
+      return fail(format!("Unable to open capture: {err}"));
+    }
+  };
+  if let Some(filter) = combined_filter {
+    if let Err(err) = cap.filter(&filter, true) {
+      let _ = app.emit("pcap_error", format!("BPF filter error: {err}"));
+    }
+  }
+  let handle = thread::spawn(move || {
+    let _ = app.emit("pcap_status", "Capture running...");
+    loop {
+      if PCAP_CANCEL.load(Ordering::SeqCst) {
+        break;
+      }
+      match cap.next_packet() {
+        Ok(packet) => {
+          let summary = summarize_packet(packet.data);
+          let _ = app.emit("pcap_packet", summary);
+        }
+        Err(pcap::Error::TimeoutExpired) => continue,
+        Err(err) => {
+          let _ = app.emit("pcap_error", format!("Capture error: {err}"));
+          break;
+        }
+      }
+    }
+    let _ = app.emit("pcap_status", "Capture stopped.");
+    PCAP_RUNNING.store(false, Ordering::SeqCst);
+  });
+  if let Ok(mut guard) = PCAP_THREAD.lock() {
+    *guard = Some(handle);
+  }
+  Ok(())
+}
+
+fn tshark_path_candidates() -> Vec<String> {
+  let mut paths = Vec::new();
+  paths.push("tshark".to_string());
+  paths.push("C:\\\\Program Files\\\\Wireshark\\\\tshark.exe".to_string());
+  paths.push("C:\\\\Program Files (x86)\\\\Wireshark\\\\tshark.exe".to_string());
+  paths
+}
+
+fn find_tshark() -> Option<String> {
+  for path in tshark_path_candidates() {
+    if Command::new(&path).arg("-v").output().map(|o| o.status.success()).unwrap_or(false) {
+      return Some(path);
+    }
+  }
+  None
+}
+
+fn tshark_available() -> bool {
+  find_tshark().is_some()
+}
+
+fn tshark_interfaces() -> Result<Vec<PcapInterface>, String> {
+  let output = Command::new("tshark")
+    .arg("-D")
+    .output()
+    .map_err(|err| err.to_string())?;
+  if !output.status.success() {
+    return Err(String::from_utf8_lossy(&output.stderr).to_string());
+  }
+  let text = String::from_utf8_lossy(&output.stdout);
+  let mut interfaces = Vec::new();
+  for line in text.lines() {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    let (_, rest) = match trimmed.split_once(". ") {
+      Some(value) => value,
+      None => continue,
+    };
+    let (name, description) = if let Some(idx) = rest.rfind(" (") {
+      if rest.ends_with(')') && idx + 2 < rest.len() {
+        (
+          rest[..idx].trim().to_string(),
+          Some(rest[idx + 2..rest.len() - 1].trim().to_string()),
+        )
+      } else {
+        (rest.trim().to_string(), None)
+      }
+    } else {
+      (rest.trim().to_string(), None)
+    };
+    if name.is_empty() {
+      continue;
+    }
+    interfaces.push(PcapInterface { name, description });
+  }
+  Ok(interfaces)
+}
+
+fn start_tshark_capture(
+  app: tauri::AppHandle,
+  interface: String,
+  filter: Option<String>,
+) -> Result<(), String> {
+  let tshark_bin = find_tshark().ok_or_else(|| "TShark not found on PATH or default locations. Install Wireshark/TShark.".to_string())?;
+  let mut cmd = Command::new(tshark_bin);
+  cmd
+    .arg("-l")
+    .arg("-n")
+    .arg("-i")
+    .arg(&interface)
+    .args([
+      "-T",
+      "fields",
+      "-E",
+      "separator=\t",
+      "-E",
+      "quote=n",
+      "-e",
+      "frame.time_relative",
+      "-e",
+      "ip.src",
+      "-e",
+      "ip.dst",
+      "-e",
+      "ipv6.src",
+      "-e",
+      "ipv6.dst",
+      "-e",
+      "_ws.col.Protocol",
+      "-e",
+      "frame.len",
+      "-e",
+      "_ws.col.Info",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+  if let Some(value) = filter {
+    cmd.arg("-f").arg(value);
+  }
+  let mut child = cmd.spawn().map_err(|err| format!("Unable to start tshark: {err}"))?;
+  let stdout = child
+    .stdout
+    .take()
+    .ok_or_else(|| "Failed to read tshark stdout.".to_string())?;
+  let stderr = child
+    .stderr
+    .take()
+    .ok_or_else(|| "Failed to read tshark stderr.".to_string())?;
+
+  if let Ok(mut guard) = TSHARK_CHILD.lock() {
+    *guard = Some(child);
+  }
+
+  let app_err = app.clone();
+  thread::spawn(move || {
+    let reader = BufReader::new(stderr);
+    for line in reader.lines().flatten() {
+      let trimmed = line.trim();
+      if !trimmed.is_empty() {
+        let _ = app_err.emit("pcap_error", format!("tshark: {trimmed}"));
+      }
+    }
+  });
+
+  let handle = thread::spawn(move || {
+    let _ = app.emit("pcap_status", "Capture running (tshark)...");
+    let reader = BufReader::new(stdout);
+    for line in reader.lines() {
+      if PCAP_CANCEL.load(Ordering::SeqCst) {
+        break;
+      }
+      match line {
+        Ok(text) => {
+          if text.trim().is_empty() {
+            continue;
+          }
+          let summary = parse_tshark_line(&text);
+          let _ = app.emit("pcap_packet", summary);
+        }
+        Err(err) => {
+          let _ = app.emit("pcap_error", format!("tshark read error: {err}"));
+          break;
+        }
+      }
+    }
+    PCAP_RUNNING.store(false, Ordering::SeqCst);
+    let _ = app.emit("pcap_status", "Capture stopped.");
+  });
+  if let Ok(mut guard) = PCAP_THREAD.lock() {
+    *guard = Some(handle);
+  }
+  Ok(())
+}
+
+fn parse_tshark_line(line: &str) -> PcapPacketEvent {
+  let mut parts = line.split('\t');
+  let time = parts.next().unwrap_or("").trim();
+  let ipv4_src = parts.next().unwrap_or("").trim();
+  let ipv4_dst = parts.next().unwrap_or("").trim();
+  let ipv6_src = parts.next().unwrap_or("").trim();
+  let ipv6_dst = parts.next().unwrap_or("").trim();
+  let protocol = parts.next().unwrap_or("").trim();
+  let length_str = parts.next().unwrap_or("").trim();
+  let info = parts.next().unwrap_or("").trim();
+
+  let src = if !ipv4_src.is_empty() {
+    ipv4_src
+  } else if !ipv6_src.is_empty() {
+    ipv6_src
+  } else {
+    "unknown"
+  };
+  let dest = if !ipv4_dst.is_empty() {
+    ipv4_dst
+  } else if !ipv6_dst.is_empty() {
+    ipv6_dst
+  } else {
+    "unknown"
+  };
+  let length = length_str.parse::<usize>().unwrap_or(0);
+  let fallback_time = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+  PcapPacketEvent {
+    time: if time.is_empty() {
+      fallback_time
+    } else {
+      time.to_string()
+    },
+    src: src.to_string(),
+    dest: dest.to_string(),
+    protocol: if protocol.is_empty() {
+      "UNKNOWN".to_string()
+    } else {
+      protocol.to_string()
+    },
+    length,
+    info: if info.is_empty() {
+      "No info".to_string()
+    } else {
+      info.to_string()
+    },
+  }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FirebaseConfigData {
+  api_key: Option<String>,
+  auth_domain: Option<String>,
+  project_id: Option<String>,
+  storage_bucket: Option<String>,
+  messaging_sender_id: Option<String>,
+  app_id: Option<String>,
+  measurement_id: Option<String>,
+}
+
+// Embed the real Firebase config from the repo root so installers ship it automatically.
+const BUNDLED_FIREBASE_CONFIG: &str =
+  include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../firebase.config.json"));
+
+impl FirebaseConfigData {
+  fn normalize(value: Option<String>) -> Option<String> {
+    value
+      .map(|text| text.trim().to_string())
+      .filter(|text| !text.is_empty())
+  }
+
+  fn merge(self, fallback: FirebaseConfigData) -> FirebaseConfigData {
+    FirebaseConfigData {
+      api_key: Self::normalize(self.api_key).or_else(|| Self::normalize(fallback.api_key)),
+      auth_domain: Self::normalize(self.auth_domain)
+        .or_else(|| Self::normalize(fallback.auth_domain)),
+      project_id: Self::normalize(self.project_id)
+        .or_else(|| Self::normalize(fallback.project_id)),
+      storage_bucket: Self::normalize(self.storage_bucket)
+        .or_else(|| Self::normalize(fallback.storage_bucket)),
+      messaging_sender_id: Self::normalize(self.messaging_sender_id)
+        .or_else(|| Self::normalize(fallback.messaging_sender_id)),
+      app_id: Self::normalize(self.app_id).or_else(|| Self::normalize(fallback.app_id)),
+      measurement_id: Self::normalize(self.measurement_id)
+        .or_else(|| Self::normalize(fallback.measurement_id)),
+    }
+  }
+
+  fn missing_required(&self) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if self.api_key.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+      fields.push("apiKey");
+    }
+    if self.auth_domain.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+      fields.push("authDomain");
+    }
+    if self.project_id.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+      fields.push("projectId");
+    }
+    if self.app_id.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+      fields.push("appId");
+    }
+    fields
+  }
+}
+
+fn load_env_firebase_config() -> FirebaseConfigData {
+  FirebaseConfigData {
+    api_key: FirebaseConfigData::normalize(std::env::var("FIREBASE_API_KEY").ok()),
+    auth_domain: FirebaseConfigData::normalize(std::env::var("FIREBASE_AUTH_DOMAIN").ok()),
+    project_id: FirebaseConfigData::normalize(std::env::var("FIREBASE_PROJECT_ID").ok()),
+    storage_bucket: FirebaseConfigData::normalize(std::env::var("FIREBASE_STORAGE_BUCKET").ok()),
+    messaging_sender_id: FirebaseConfigData::normalize(
+      std::env::var("FIREBASE_MESSAGING_SENDER_ID").ok(),
+    ),
+    app_id: FirebaseConfigData::normalize(std::env::var("FIREBASE_APP_ID").ok()),
+    measurement_id: FirebaseConfigData::normalize(std::env::var("FIREBASE_MEASUREMENT_ID").ok()),
+  }
+}
+
+fn load_packaged_firebase_config() -> FirebaseConfigData {
+  serde_json::from_str::<FirebaseConfigData>(BUNDLED_FIREBASE_CONFIG).unwrap_or_else(|error| {
+    eprintln!("Unable to parse firebase.config.json: {}", error);
+    FirebaseConfigData::default()
+  })
+}
+
+fn load_external_firebase_config() -> Option<FirebaseConfigData> {
+  // Prefer a firebase.config.json next to the executable or in the user's config dir.
+  let mut candidates: Vec<PathBuf> = Vec::new();
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      candidates.push(dir.join("firebase.config.json"));
+    }
+  }
+  if let Some(config_dir) = dirs::config_dir() {
+    candidates.push(config_dir.join("Net Kit").join("firebase.config.json"));
+    candidates.push(config_dir.join("net-kit").join("firebase.config.json"));
+  }
+  for path in candidates {
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+      if let Ok(parsed) = serde_json::from_str::<FirebaseConfigData>(&raw) {
+        return Some(parsed);
+      }
+    }
+  }
+  None
+}
+
+fn load_env_from_exe_dir() {
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      let env_path = dir.join(".env");
+      let _ = dotenvy::from_path(env_path);
+    }
+  }
+}
+
+fn ensure_firebase_config_written(app: &tauri::AppHandle) -> Option<PathBuf> {
+  // Prefer config in %APPDATA%/Net Kit/firebase.config.json (Windows) or platform config dir.
+  let config_dir = match dirs::config_dir() {
+    Some(dir) => dir.join("Net Kit"),
+    None => {
+      // fallback to exe directory if config_dir unavailable
+      if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+          dir.to_path_buf()
+        } else {
+          return None;
+        }
+      } else {
+        return None;
+      }
+    }
+  };
+  let target = config_dir.join("firebase.config.json");
+  if target.exists() {
+    return Some(target);
+  }
+
+  // Try copying from resources or exe dir if present
+  let mut candidates: Vec<PathBuf> = Vec::new();
+  if let Ok(dir) = app.path().resource_dir() {
+    candidates.push(dir.join("firebase.config.json"));
+  }
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      candidates.push(dir.join("firebase.config.json"));
+    }
+  }
+  for src in candidates {
+    if src.exists() {
+      let _ = fs::create_dir_all(&config_dir);
+      if fs::copy(&src, &target).is_ok() {
+        return Some(target);
+      }
+    }
+  }
+
+  // As a final fallback, write the bundled template (may contain real keys if provided).
+  let _ = fs::create_dir_all(&config_dir);
+  if fs::write(&target, BUNDLED_FIREBASE_CONFIG).is_ok() {
+    return Some(target);
+  }
+  None
+}
+
 #[tauri::command]
 fn firebase_config() -> serde_json::Value {
+  let env_config = load_env_firebase_config();
+  let external_config = load_external_firebase_config().unwrap_or_default();
+  let packaged_config = load_packaged_firebase_config();
+  let merged = env_config.merge(external_config).merge(packaged_config);
+  let missing = merged.missing_required();
+  if !missing.is_empty() {
+    eprintln!(
+      "Missing Firebase configuration values: {}. Login will fail until they are provided via environment variables or firebase.config.json.",
+      missing.join(", ")
+    );
+  }
   serde_json::json!({
-    "apiKey": std::env::var("FIREBASE_API_KEY").unwrap_or_default(),
-    "authDomain": std::env::var("FIREBASE_AUTH_DOMAIN").unwrap_or_default(),
-    "projectId": std::env::var("FIREBASE_PROJECT_ID").unwrap_or_default(),
-    "storageBucket": std::env::var("FIREBASE_STORAGE_BUCKET").unwrap_or_default(),
-    "messagingSenderId": std::env::var("FIREBASE_MESSAGING_SENDER_ID").unwrap_or_default(),
-    "appId": std::env::var("FIREBASE_APP_ID").unwrap_or_default(),
-    "measurementId": std::env::var("FIREBASE_MEASUREMENT_ID").unwrap_or_default()
+    "apiKey": merged.api_key.unwrap_or_default(),
+    "authDomain": merged.auth_domain.unwrap_or_default(),
+    "projectId": merged.project_id.unwrap_or_default(),
+    "storageBucket": merged.storage_bucket.unwrap_or_default(),
+    "messagingSenderId": merged.messaging_sender_id.unwrap_or_default(),
+    "appId": merged.app_id.unwrap_or_default(),
+    "measurementId": merged.measurement_id.unwrap_or_default()
   })
 }
 
@@ -1152,6 +2046,7 @@ fn firebase_config() -> serde_json::Value {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  load_env_from_exe_dir();
   dotenv().ok();
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
@@ -1163,9 +2058,16 @@ pub fn run() {
       port_scan_start,
       port_scan_stop,
       run_terminal,
-      run_proxy_request
+      run_proxy_request,
+      pcap_start,
+      pcap_stop,
+      pcap_interfaces,
+      honeypot_start,
+      honeypot_stop,
+      ensure_npcap
     ])
     .setup(|app| {
+      let _ = ensure_firebase_config_written(&app.handle());
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

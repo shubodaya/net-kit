@@ -1,10 +1,10 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Cyber Kit",
+  "productName": "Net Kit",
   "version": "0.1.0",
-  "identifier": "com.cyberkit.desktop",
+  "identifier": "com.netkit.desktop",
   "build": {
-    "frontendDist": "../desktop-dist",
+    "frontendDist": "./target/desktop-dist-build",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npx serve . -l 3000",
     "beforeBuildCommand": "node scripts/prepare-desktop.mjs"
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Cyber Kit",
+        "title": "Net Kit",
         "width": 1024,
         "height": 768,
         "resizable": true,
@@ -31,16 +31,16 @@
     "active": true,
     "targets": "nsis",
     "icon": [
-      "icons/icon.ico",
-      "icons/icon.icns",
+      "icons/favicon.ico",
       "icons/icon.png",
-      "icons/16x16.png",
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/192x192.png",
-      "icons/512x512.png",
-      "icons/2048x2048.png"
+      "icons/favicon-16x16.png",
+      "icons/favicon-32x32.png",
+      "icons/android-chrome-192x192.png",
+      "icons/android-chrome-512x512.png"
+    ],
+    "resources": [
+      "../npcap-1.86.exe",
+      "../firebase.config.json"
     ],
     "windows": {
       "certificateThumbprint": null,

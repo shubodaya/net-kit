@@ -183,5 +183,5 @@ app.get("*", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Cyber Kit server running on http://localhost:${port}`);
+  console.log(`Net Kit server running on http://localhost:${port}`);
 });

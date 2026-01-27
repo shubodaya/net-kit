@@ -28,6 +28,7 @@ const commandAssistState = {
   selectedPlatformAction: null,
   selectedVendor: null,
   selectedVendorAction: null,
+  selectedVendorCategoryLabel: null,
   commandResult: null,
   history: [],
 };
@@ -41,6 +42,7 @@ export function initCommandAssist() {
   commandAssistState.selectedPlatformAction = null;
   commandAssistState.selectedVendor = null;
   commandAssistState.selectedVendorAction = null;
+  commandAssistState.selectedVendorCategoryLabel = null;
   commandAssistState.commandResult = null;
   commandAssistState.history = [];
 }
@@ -86,6 +88,7 @@ export function renderPlatformSelection(container) {
       commandAssistState.selectedPlatform = deviceType;
       commandAssistState.selectedVendor = null;
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.push("platform-selection");
       commandAssistState.step = "vendor-selection";
       renderVendorSelection(container);
@@ -237,6 +240,7 @@ export function renderVendorSelection(container) {
   const optionGrid = createOptionGrid(vendorOptions, (option) => {
     commandAssistState.selectedVendor = option.value;
     commandAssistState.selectedVendorAction = null;
+    commandAssistState.selectedVendorCategoryLabel = null;
     commandAssistState.history.push("vendor-selection");
     
     // Special handling for Cisco: show category exploration first
@@ -392,7 +396,8 @@ export function renderCiscoCategorySelection(container) {
   }));
 
   const optionGrid = createEnhancedOptionGrid(categories, (option) => {
-    commandAssistState.selectedVendorAction = option.label;
+    commandAssistState.selectedVendorAction = option.value;
+    commandAssistState.selectedVendorCategoryLabel = option.label;
     commandAssistState.history.push("cisco-category");
     commandAssistState.step = "cisco-actions";
     renderCiscoActionsForCategory(container, option.value);
@@ -409,6 +414,7 @@ export function renderCiscoCategorySelection(container) {
       commandAssistState.step = "vendor-selection";
       commandAssistState.selectedVendor = null;
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.pop();
       renderVendorSelection(container);
       speakCommandMessage("Back to vendor selection.");
@@ -433,15 +439,21 @@ export function renderCiscoActionsForCategory(container, categoryKey) {
   if (!vendor || !vendor.categories || !vendor.categories[categoryKey]) return;
 
   const category = vendor.categories[categoryKey];
-  const categoryActions = Object.entries(vendor.actions)
-    .filter(([key]) => {
-      // Find actions that match this category
+  commandAssistState.selectedVendorAction = categoryKey;
+  commandAssistState.selectedVendorCategoryLabel = category.title;
+  let categoryActions = Object.entries(vendor.actions).filter(
+    ([, action]) => action.category === categoryKey
+  );
+
+  if (!categoryActions.length) {
+    categoryActions = Object.entries(vendor.actions).filter(([key]) => {
       const actionLower = key.toLowerCase();
-      const categoryLower = category.title.toLowerCase();
-      return actionLower.includes(categoryLower.split(" ")[0]) || 
-             actionLower.includes(categoryKey.split("_")[0]);
-    })
-    .slice(0, 8); // Limit to 8 most relevant actions per category
+      const categoryToken = categoryKey.split("_")[0];
+      return actionLower.includes(categoryToken);
+    });
+  }
+
+  categoryActions = categoryActions.slice(0, 8);
 
   container.innerHTML = "";
 
@@ -494,6 +506,7 @@ export function renderCiscoActionsForCategory(container, categoryKey) {
     onBack: () => {
       commandAssistState.step = "cisco-category";
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.pop();
       renderCiscoCategorySelection(container);
       speakCommandMessage(`Back to ${category.title}.`);
@@ -577,9 +590,7 @@ export function renderCiscoCommandResult(container) {
     if (option.value === "another") {
       commandAssistState.commandResult = null;
       commandAssistState.history.pop();
-      const categoryKey = commandAssistState.selectedVendorAction
-        ?.toLowerCase()
-        .replace(/\s+/g, "_");
+      const categoryKey = commandAssistState.selectedVendorAction || "device_management";
       renderCiscoActionsForCategory(container, categoryKey);
       speakCommandMessage("Here are more commands in this category.");
     } else if (option.value === "category") {
@@ -774,6 +785,7 @@ export function renderVendorResult(container) {
     if (option.value === "another-action") {
       commandAssistState.step = "vendor-action";
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.pop();
       renderVendorActionSelection(container);
       speakCommandMessage("Let's find another action.");
@@ -781,6 +793,7 @@ export function renderVendorResult(container) {
       commandAssistState.step = "vendor-selection";
       commandAssistState.selectedVendor = null;
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.pop();
       renderVendorSelection(container);
       speakCommandMessage("Choose a new vendor.");
@@ -800,6 +813,7 @@ export function renderVendorResult(container) {
     onBack: () => {
       commandAssistState.step = "vendor-action";
       commandAssistState.selectedVendorAction = null;
+      commandAssistState.selectedVendorCategoryLabel = null;
       commandAssistState.history.pop();
       renderVendorActionSelection(container);
       speakCommandMessage("Back to action selection.");
@@ -856,6 +870,8 @@ export function renderCommandAssist(container) {
 let commandSpeechUtterance = null;
 
 export function speakCommandMessage(text) {
+  const ENABLE_COMMAND_TTS = false;
+  if (!ENABLE_COMMAND_TTS) return;
   if (!text || !("speechSynthesis" in window)) return;
 
   // Check global mute flag

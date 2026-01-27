@@ -46,9 +46,6 @@ import {
   getAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signInWithRedirect,
-  getRedirectResult,
-  GoogleAuthProvider,
   fetchSignInMethodsForEmail,
   onAuthStateChanged,
   updateProfile,
@@ -83,20 +80,32 @@ console.log("firebaseConfig from Rust:", firebaseConfig);
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const provider = new GoogleAuthProvider();
 const db = getFirestore(app);
 
-window._firebase = { app, auth, provider, db };
+window._firebase = { app, auth, db };
 
-const GOOGLE_REDIRECT_KEY = "ck_google_redirect_pending";
 const LOGIN_ACTIVITY_KEY = "ck_login_activity_pending";
 const OFFLINE_MODE_KEY = "ck_offline_mode";
 const STEALTH_MODE_KEY = "ck_stealth_mode";
 const STEALTH_IP_KEY = "ck_stealth_ip";
 const LAST_ACTIVITY_PREFIX = "ck_last_active_";
+const SPEECH_MUTE_KEY = "ck_speech_muted";
+const CIPHER_AUTOSHOW_KEY = "ck_cipher_autoshow";
 
 function getUserKey() {
   return state.currentUser?.uid || state.currentUser?.email || "guest";
+}
+
+function isGuestUser() {
+  return Boolean(state.isGuest || state.currentUser?.isGuest);
+}
+
+function requireFullAccount(reason) {
+  if (isGuestUser()) {
+    alert(`Create an account to ${reason}. Guest mode is read-only and cannot use cloud features.`);
+    return false;
+  }
+  return true;
 }
 
 function loadUserSessions() {
@@ -308,14 +317,14 @@ function saveAuthFailureCount(email, count) {
 }
 
 function getUserStatsDocRef() {
-  if (!auth.currentUser) return null;
+  if (!auth.currentUser || isGuestUser()) return null;
   return doc(db, "userStats", auth.currentUser.uid);
 }
 
 let userDataSaveTimer = null;
 
 function scheduleUserDataSave() {
-  if (!auth.currentUser) return;
+  if (!auth.currentUser || isGuestUser()) return;
   if (userDataSaveTimer) {
     clearTimeout(userDataSaveTimer);
   }
@@ -386,7 +395,9 @@ function saveLocalReports(reports) {
 }
 
 async function saveReportToFirestore(payload) {
-  if (!auth.currentUser) return null;
+  if (!auth.currentUser || !requireFullAccount("save reports to the cloud")) {
+    return null;
+  }
   const expiresAt = Timestamp.fromDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
   const report = {
     ...payload,
@@ -463,7 +474,7 @@ function updateReportWarning() {
 }
 
 async function loadReports() {
-  if (!auth.currentUser) return;
+  if (!auth.currentUser || isGuestUser()) return;
   const q = query(
     collection(db, "users", auth.currentUser.uid, "reports"),
     orderBy("createdAt", "desc")
@@ -489,6 +500,7 @@ async function loadReports() {
 
 const state = {
   currentUser: null,
+  isGuest: false,
   toolData: {},
   notifications: [],
   activities: [],
@@ -517,12 +529,30 @@ const state = {
 };
 
 // Global speech synthesis mute flag
-window.isSpeechMuted = false;
+let initialSpeechMuted = false;
+try {
+  initialSpeechMuted = localStorage.getItem(SPEECH_MUTE_KEY) === "1";
+} catch {
+  initialSpeechMuted = false;
+}
+window.isSpeechMuted = initialSpeechMuted;
+
+let cipherAutoEnabled = true;
+try {
+  const storedAuto = localStorage.getItem(CIPHER_AUTOSHOW_KEY);
+  if (storedAuto !== null) {
+    cipherAutoEnabled = storedAuto === "1";
+  }
+} catch {
+  cipherAutoEnabled = true;
+}
 
 const honeyEvents = [];
 
 let wifiScanTimer = null;
 let wifiLiveActive = false;
+let wifiScanInProgress = false;
+const WIFI_SCAN_TIMEOUT_MS = 12000;
 let wifiSelectedChannel = null;
 let wifiSelectedSsid = null;
 const wifiNetworkHistory = new Map();
@@ -533,15 +563,45 @@ var pcapTimer = null;
 var pcapStartedAt = 0;
 var pcapDurationMs = 0;
 const PCAP_MAX_PACKETS = 240;
+const PCAP_SAVES_KEY = "ck_pcap_saves";
+let pcapSelectedInterface = "auto";
 var pcapStartBtn;
 var pcapStopBtn;
 var pcapClearBtn;
+var pcapSaveBtn;
+var pcapExportBtn;
+var pcapExportFormat;
+var pcapViewSavedBtn;
+var pcapInfoBtn;
+var pcapInfoPanel;
+var pcapSavedModal;
+var pcapSavedList;
+var pcapSavedCloseBtn;
+var pcapSavedDeleteBtn;
+var pcapSavedCheckAllBtn;
+var pcapSavedUncheckAllBtn;
 var pcapStatus;
 var pcapFeed;
 var pcapStats;
 var pcapInterface;
+var pcapInterfaceSelect;
+var pcapInterfaceList;
+var pcapInterfacesList;
 var pcapFilterInput;
 var pcapProtocolFilters;
+var pcapUnlistenPacket;
+var pcapUnlistenStatus;
+var pcapUnlistenError;
+var pcapActiveInterface = "auto";
+let npcapReady = false;
+var pcapRefreshBtn;
+let pcapInterfaces = [];
+const hasNativePcap = isDesktopApp() && Boolean(getTauriInvoke());
+// Expose for debugging in console
+if (typeof window !== "undefined") {
+  window.hasNativePcap = hasNativePcap;
+  window.getTauriInvokeFn = getTauriInvoke;
+}
 let chatInvitesUnsub = null;
 let chatMessagesUnsub = null;
 let chatMessagesChatId = null;
@@ -685,7 +745,7 @@ const forms = {
 };
 const loginMessage = document.getElementById("loginMessage");
 const welcome = document.getElementById("welcome");
-const googleAuthBtn = document.getElementById("googleAuthBtn");
+const guestAuthBtn = document.getElementById("guestLoginBtn");
 const notifBtn = document.getElementById("notifBtn");
 const notifPanel = document.getElementById("notifPanel");
 const notifList = document.getElementById("notifList");
@@ -746,6 +806,7 @@ const cipherToggle = document.getElementById("cipherToggle");
 const cipherWidget = document.getElementById("cipherWidget");
 const cipherBody = document.getElementById("cipherBody");
 const cipherCloseBtn = document.getElementById("cipherCloseBtn");
+const cipherAutoBtn = document.getElementById("cipherAutoBtn");
 const cipherAiBtn = document.getElementById("cipherAiBtn");
 const cipherTopBtn = document.getElementById("cipherTopBtn");
 const cipherDeepBody = document.getElementById("cipherDeepBody");
@@ -774,6 +835,7 @@ const settingsCloseBtn = document.getElementById("settingsCloseBtn");
 const settingsCancelBtn = document.getElementById("settingsCancelBtn");
 
 closeProfileDropdown();
+updateCipherAutoBtn();
 
 
 const setCurrentUser = (user) => {
@@ -827,7 +889,7 @@ function setProfileInitials(name) {
     .slice(0, 2)
     .join("");
   profileBtn.querySelector(".profile-initials").textContent =
-    initials || "CK";
+    initials || "NK";
 }
 
 function closeProfileDropdown() {
@@ -890,11 +952,21 @@ const showDashboard = () => {
     state.currentUser?.email ||
     "user";
   welcome.textContent = `Welcome, ${displayName}`;
+  if (chatHandleDisplay) {
+    if (state.userHandle?.handle) {
+      chatHandleDisplay.textContent = state.userHandle.handle;
+    }
+  }
   setProfileInitials(displayName);
   updateOverview();
-  cipherWidget.classList.remove("hidden");
-  cipherState.opened = true;
-  renderCipherGuide();
+  if (cipherAutoEnabled) {
+    cipherWidget.classList.remove("hidden");
+    cipherState.opened = true;
+    renderCipherGuide();
+  } else {
+    cipherWidget.classList.add("hidden");
+    cipherState.opened = false;
+  }
   setMobileNavState(false);
   resetInactivityTimer();
 };
@@ -1103,6 +1175,27 @@ const cipherDeepContext = {
   complianceFramework: null,
   complianceDetail: null,
 };
+
+function updateCipherAutoBtn() {
+  if (!cipherAutoBtn) return;
+  cipherAutoBtn.textContent = cipherAutoEnabled ? "Auto-popup: On" : "Auto-popup: Off";
+  cipherAutoBtn.setAttribute("aria-pressed", cipherAutoEnabled ? "true" : "false");
+}
+
+function setCipherAutoEnabled(enabled) {
+  cipherAutoEnabled = Boolean(enabled);
+  try {
+    localStorage.setItem(CIPHER_AUTOSHOW_KEY, cipherAutoEnabled ? "1" : "0");
+  } catch {
+    // ignore storage failures
+  }
+  updateCipherAutoBtn();
+  if (cipherAutoEnabled && cipherWidget?.classList.contains("hidden")) {
+    cipherWidget.classList.remove("hidden");
+    cipherState.opened = true;
+    renderCipherGuide();
+  }
+}
 
 const cipherChats = {
   list: [],
@@ -1362,14 +1455,14 @@ function renderActiveCipherChat() {
 
 function renderCipherGuide() {
   if (!cipherBody) return;
-  const steps = cipherGuides[cipherState.tool] || cipherGuides.overview;
   cipherBody.innerHTML = "";
-  addCipherMessage("Cipher", "bot");
-  addCipherMessage("Hi, I am Cipher, your assistant.", "bot");
-  addCipherMessage("To explore tools:", "bot");
-  if (steps.length) {
-    addCipherMessage(`Step 1: ${steps[0]}`, "bot");
-  }
+  const lines = [
+    "Hi, I am Cipher, your assistant.",
+    "To explore tools:",
+    "Use the sidebar to pick a tool.",
+    "Click Next for the following instruction.",
+  ];
+  lines.forEach((line) => addCipherMessage(line, "bot"));
 }
 
 
@@ -1384,7 +1477,8 @@ function getCipherSpeechText() {
 }
 
 function speakCipherText(text) {
-  if (!text) return;
+  if (!cipherWidget || cipherWidget.classList.contains("hidden")) return;
+  if (!text || window.isSpeechMuted) return;
   if (!("speechSynthesis" in window)) {
     addCipherMessage("Speech not supported in this browser.", "bot");
     return;
@@ -1398,9 +1492,36 @@ function speakCipherText(text) {
 }
 
 function speakCipherLatest() {
-  const text = getCipherSpeechText();
-  if (text) {
-    speakCipherText(text);
+  const steps = getCipherSpeechText();
+  if (!steps) return;
+  const intro =
+    "Hello, my name is Cipher. I am your assistant. To help you with tools in this application, follow my instructions.";
+  speakCipherText(`${intro} ${steps}`);
+}
+
+// Announce guidance for user actions; speaks unless muted, always logs to chat
+function announceCipherStep(message) {
+  if (!message) return;
+  addCipherMessage(message, "bot");
+  speakCipherText(message);
+}
+
+function getCipherFollowUp(toolKey) {
+  switch (toolKey) {
+    case "portscan":
+      return "Port scan finished. Review open ports, then consider running a targeted service check.";
+    case "ipscan":
+      return "IP scan completed. You can pivot to port scanning the active hosts.";
+    case "wifi":
+      return "Wi-Fi scan done. Save the findings or run a new scan on another channel.";
+    case "pcap":
+      return "Packet capture saved. Export as PCAP/PCAPNG or start a fresh capture.";
+    case "hash":
+      return "Hash check completed. Save the verdict or submit another hash.";
+    case "url":
+      return "URL check done. If risky, block it and notify users; otherwise, move to the next URL.";
+    default:
+      return "Result recorded. Save it if useful, or pick another tool from the sidebar.";
   }
 }
 
@@ -1416,7 +1537,7 @@ function getCipherDeepSpeechText() {
 
 function speakCipherDeep(text) {
   const content = text || getCipherDeepSpeechText();
-  if (!content) return;
+  if (!content || window.isSpeechMuted) return;
   if (!("speechSynthesis" in window)) {
     addCipherMessage("Speech not supported in this browser.", "bot");
     return;
@@ -1434,6 +1555,87 @@ function stopAllSpeech() {
   window.speechSynthesis.cancel();
   cipherSpeechUtterance = null;
   cipherDeepSpeechUtterance = null;
+}
+
+function stopAllPanelsSpeech() {
+  stopAllSpeech();
+  stopAllSpeechForCommand();
+  stopAllSpeechForToolKit();
+  stopIncidentTriageSpeech();
+  stopThreatIntelSpeech();
+  stopPhishingAnalyzerSpeech();
+  stopComplianceHelperSpeech();
+}
+
+let speechControlsBound = false;
+function bindGlobalSpeechControls() {
+  if (speechControlsBound) return;
+  speechControlsBound = true;
+
+  // Global click handler for any mute/stop buttons (covers duplicates in header/footer)
+  document.addEventListener("click", (event) => {
+    const muteBtn = event.target.closest(".mute-tts-btn");
+    if (muteBtn) {
+      event.preventDefault();
+      setSpeechMuteState(!window.isSpeechMuted);
+      return;
+    }
+    const stopBtn = event.target.closest(".stop-speak-button");
+    if (stopBtn) {
+      event.preventDefault();
+      stopAllPanelsSpeech();
+    }
+  });
+
+  // Keyboard support for Space/Enter on focused controls
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const active = document.activeElement;
+    if (!active) return;
+    if (active.classList?.contains("mute-tts-btn")) {
+      event.preventDefault();
+      setSpeechMuteState(!window.isSpeechMuted);
+    } else if (active.classList?.contains("stop-speak-button")) {
+      event.preventDefault();
+      stopAllPanelsSpeech();
+    }
+  });
+}
+
+function setSpeechMuteState(isMuted) {
+  const nextState = Boolean(isMuted);
+  const changed = nextState !== window.isSpeechMuted;
+  window.isSpeechMuted = nextState;
+
+  if (window.isSpeechMuted) {
+    // Halt any active speech across panels and pause synthesis engine
+    stopAllPanelsSpeech();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.pause();
+    }
+  }
+
+  const muteButtons = document.querySelectorAll(".mute-tts-btn");
+  muteButtons.forEach((btn) => {
+    const unmuteIcon = btn.querySelector(".unmute-icon");
+    const muteIcon = btn.querySelector(".mute-icon");
+    const labelEl = btn.querySelector(".mute-label");
+    btn.classList.toggle("muted", window.isSpeechMuted);
+    btn.setAttribute("aria-pressed", window.isSpeechMuted ? "true" : "false");
+    btn.setAttribute("aria-label", window.isSpeechMuted ? "Unmute" : "Mute");
+    btn.title = window.isSpeechMuted ? "Unmute" : "Mute";
+    if (muteIcon) muteIcon.classList.toggle("hidden", window.isSpeechMuted);
+    if (unmuteIcon) unmuteIcon.classList.toggle("hidden", !window.isSpeechMuted);
+    if (labelEl) labelEl.textContent = window.isSpeechMuted ? "Unmute" : "Mute";
+  });
+
+  try {
+    localStorage.setItem(SPEECH_MUTE_KEY, window.isSpeechMuted ? "1" : "0");
+  } catch {
+    // localStorage may be unavailable (private mode); ignore persist errors
+  }
+
+  return changed;
 }
 
 function advanceCipherStep(message) {
@@ -1481,23 +1683,30 @@ function handleCipherInput(text) {
   const steps = cipherGuides[cipherState.tool] || cipherGuides.overview;
   if (!steps.length) {
     addCipherMessage("No guide available for this tool yet.", "bot");
+    speakCipherText("No guide available for this tool yet.");
     return;
   }
   if (cleaned === "next") {
     if (cipherState.stepIndex >= steps.length - 1) {
       addCipherMessage("End of steps. Explore other tools on the left.", "bot");
+      speakCipherText("End of steps. Explore other tools on the left.");
       return;
     }
     cipherState.stepIndex += 1;
-    addCipherMessage(`Step ${cipherState.stepIndex + 1}: ${steps[cipherState.stepIndex]}`, "bot");
+    const msg = steps[cipherState.stepIndex];
+    addCipherMessage(msg, "bot");
+    speakCipherText(msg);
     return;
   }
   if (cleaned === "restart") {
     cipherState.stepIndex = 0;
-    addCipherMessage(`Step 1: ${steps[0]}`, "bot");
+    const msg = `Restarted. ${steps[0]}`;
+    addCipherMessage(msg, "bot");
+    speakCipherText(msg);
     return;
   }
   addCipherMessage(`Tip: type "next" for the next step, or "restart".`, "bot");
+  speakCipherText(`Tip: click Next for the next step, or Restart to begin again.`);
 }
 
 async function fetchBotReply(bot, text, context) {
@@ -1599,6 +1808,9 @@ function closePrompt(result) {
   promptResolver(result);
   promptResolver = null;
 }
+
+// Expose prompt helper for other modules
+window.openPrompt = openPrompt;
 
 function showInfo(message) {
   return openPrompt({
@@ -1821,6 +2033,11 @@ function registerRun(message, toolKey) {
   updateOverview();
   addActivity(message);
   addNotification(message);
+  announceCipherStep(`Result: ${message}`);
+  const followUp = getCipherFollowUp(toolKey);
+  if (followUp) {
+    announceCipherStep(followUp);
+  }
   saveUserStats();
 }
 
@@ -1836,6 +2053,9 @@ function setActiveTool(toolName) {
     card.classList.toggle("active", card.dataset.tool === toolName);
   });
   updateCipherContext(toolName);
+  announceCipherStep(
+    `You opened ${toolName}. Run it, review the output, then save or switch tools using the sidebar. Click Next for more guidance.`
+  );
   handleWifiAutoScan(toolName);
   if (toolName === "wifi") {
     setTimeout(() => renderWifiCharts(state.toolData.wifiNetworks || []), 0);
@@ -1909,7 +2129,7 @@ function finalizeLoginSession() {
   }
 
 async function logAuthFailure(email, code) {
-  if (!email) return;
+  if (!email || isGuestUser()) return;
   try {
     const methods = await fetchSignInMethodsForEmail(auth, email);
     if (!methods.length) return;
@@ -1935,7 +2155,7 @@ function shouldCountAuthFailure(code) {
 }
 
 async function applyAuthFailures(email) {
-  if (!email) return;
+  if (!email || isGuestUser()) return;
   const pending = loadAuthFailureCount(email);
   if (pending) {
     state.failedLogins += pending;
@@ -1960,6 +2180,7 @@ async function applyAuthFailures(email) {
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
+    state.isGuest = false;
     setCurrentUser(user);
     if (shouldForceInactivityLogout()) {
       pendingLogoutMessage = "Logged out due to inactivity.";
@@ -2005,6 +2226,7 @@ onAuthStateChanged(auth, async (user) => {
     updateOverview();
     showDashboard();
   } else {
+    state.isGuest = false;
     if (state.currentUser) {
       addActivity("Signed out");
       clearLastActivity();
@@ -2037,15 +2259,33 @@ tabs.forEach((tab) => {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));
 });
 
-if (googleAuthBtn) {
-  googleAuthBtn.addEventListener("click", async () => {
-    try {
-      sessionStorage.setItem(LOGIN_ACTIVITY_KEY, "1");
-      sessionStorage.setItem(GOOGLE_REDIRECT_KEY, "1");
-      await signInWithRedirect(auth, provider);
-    } catch (error) {
-      alert(error.message || "Google sign-in failed.");
-    }
+function enterGuestMode() {
+  state.isGuest = true;
+  const guestUser = { uid: "guest", displayName: "Guest", email: "", isGuest: true };
+  setCurrentUser(guestUser);
+  state.userHandle = null;
+  clearLoginMessage();
+  state.sessions = state.sessions || [];
+  state.reports = loadLocalReports();
+  renderReportList();
+  updateReportWarning();
+  state.notifications = [];
+  renderNotifications();
+  updateBadge();
+  state.chat = { invites: [], activeChatId: null, chats: {} };
+  renderChatInvites();
+  renderChatList();
+  renderChatMessages();
+  renderChatHandle();
+  applyOfflineState();
+  applyStealthState();
+  showDashboard();
+  addNotification("Guest mode enabled. Create an account to sync data and use chat features.");
+}
+
+if (guestAuthBtn) {
+  guestAuthBtn.addEventListener("click", () => {
+    enterGuestMode();
   });
 }
 
@@ -2195,22 +2435,6 @@ document.addEventListener("click", (event) => {
   }
 });
 
-getRedirectResult(auth).catch((error) => {
-  console.error("Google redirect sign-in failed:", error);
-  sessionStorage.removeItem(GOOGLE_REDIRECT_KEY);
-  setLoginMessage(error.message || "Google sign-in failed.");
-});
-
-getRedirectResult(auth).then((result) => {
-  if (!sessionStorage.getItem(GOOGLE_REDIRECT_KEY)) return;
-  sessionStorage.removeItem(GOOGLE_REDIRECT_KEY);
-  if (!result?.user) {
-    setLoginMessage(
-      "Google sign-in did not complete. Check Firebase authorized domains and try again."
-    );
-  }
-});
-
 if (profileSettingsBtn) {
   profileSettingsBtn.addEventListener("click", () => {
     closeProfileDropdown();
@@ -2220,6 +2444,13 @@ if (profileSettingsBtn) {
 
 if (profileLogoutBtn) {
   profileLogoutBtn.addEventListener("click", async () => {
+    if (isGuestUser()) {
+      state.isGuest = false;
+      setCurrentUser(null);
+      closeProfileDropdown();
+      showAuth();
+      return;
+    }
     try {
       pendingLogoutMessage = "";
       await signOut(auth);
@@ -2307,6 +2538,11 @@ async function handleSettingsSave(event) {
   }
   const displayName = fullName || state.currentUser.displayName || state.currentUser.email || "user";
   welcome.textContent = `Welcome, ${displayName}`;
+  if (chatHandleDisplay) {
+    if (state.userHandle?.handle) {
+      chatHandleDisplay.textContent = state.userHandle.handle;
+    }
+  }
   setProfileInitials(displayName);
   closeSettingsModal();
 }
@@ -2452,6 +2688,12 @@ if (sessionCreateBtn) {
   });
 }
 
+if (cipherAutoBtn) {
+  cipherAutoBtn.addEventListener("click", () => {
+    setCipherAutoEnabled(!cipherAutoEnabled);
+  });
+}
+
 if (cipherToggle) {
   cipherToggle.addEventListener("click", () => {
     cipherWidget.classList.toggle("hidden");
@@ -2505,6 +2747,7 @@ if (cipherAiBtn) {
 if (cipherDeepCloseBtn) {
   cipherDeepCloseBtn.addEventListener("click", () => {
     cipherDeepPanel.classList.add("hidden");
+    stopAllPanelsSpeech();
   });
 }
 
@@ -2721,7 +2964,7 @@ if (cipherSpeakBtn) {
   });
 }
 
-// Note: Stop speaking functionality removed - use global mute button at top instead
+// Stop speaking is handled by the deep chat stop button and panel footers
 
 forms.signup.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2780,6 +3023,12 @@ forms.login.addEventListener("input", () => {
 const logoutBtn = document.getElementById("logoutBtn");
 if (logoutBtn) {
   logoutBtn.addEventListener("click", async () => {
+    if (isGuestUser()) {
+      state.isGuest = false;
+      setCurrentUser(null);
+      showAuth();
+      return;
+    }
     try {
       pendingLogoutMessage = "";
       await signOut(auth);
@@ -3165,6 +3414,10 @@ const honeySimulateBtn = document.getElementById("honeySimulateBtn");
 const honeyClearBtn = document.getElementById("honeyClearBtn");
 const honeyStatus = document.getElementById("honeyStatus");
 const honeyOutput = document.getElementById("honeyOutput");
+let honeyUnlistenEvent = null;
+let honeyUnlistenStatus = null;
+let honeyUnlistenError = null;
+let honeyActive = false;
 const siemInput = document.getElementById("siemInput");
 const siemAnalyzeBtn = document.getElementById("siemAnalyzeBtn");
 const siemClearBtn = document.getElementById("siemClearBtn");
@@ -3217,7 +3470,7 @@ let portScanActive = false;
 let portScanPortsOpen = new Map();
 let portScanLastTarget = "";
 
-window.addEventListener("DOMContentLoaded", () => {
+function initAppDomBindings() {
   pcapStartBtn = document.getElementById("pcapStartBtn");
   pcapStopBtn = document.getElementById("pcapStopBtn");
   pcapClearBtn = document.getElementById("pcapClearBtn");
@@ -3225,8 +3478,55 @@ window.addEventListener("DOMContentLoaded", () => {
   pcapFeed = document.getElementById("pcapFeed");
   pcapStats = document.getElementById("pcapStats");
   pcapInterface = document.getElementById("pcapInterface");
+  pcapInterfaceSelect = document.getElementById("pcapInterfaceSelect");
+  pcapInterfaceList = document.getElementById("pcapInterfaceList");
+  pcapInterfacesList = document.getElementById("pcapInterfacesList");
   pcapFilterInput = document.getElementById("pcapFilterInput");
   pcapProtocolFilters = document.querySelectorAll(".pcap-filter");
+  pcapSaveBtn = document.getElementById("pcapSaveBtn");
+  pcapExportBtn = document.getElementById("pcapExportBtn");
+  pcapExportFormat = document.getElementById("pcapExportFormat");
+  pcapViewSavedBtn = document.getElementById("pcapViewSavedBtn");
+  pcapInfoBtn = document.getElementById("pcapInfoBtn");
+  pcapInfoPanel = document.getElementById("pcapInfoPanel");
+  pcapSavedModal = document.getElementById("pcapSavedModal");
+  pcapSavedList = document.getElementById("pcapSavedList");
+  pcapSavedCloseBtn = document.getElementById("pcapSavedCloseBtn");
+  pcapSavedDeleteBtn = document.getElementById("pcapSavedDeleteBtn");
+  pcapSavedCheckAllBtn = document.getElementById("pcapSavedCheckAllBtn");
+  pcapSavedUncheckAllBtn = document.getElementById("pcapSavedUncheckAllBtn");
+  pcapRefreshBtn = document.getElementById("pcapRefreshBtn");
+  if (pcapStatus) {
+    if (hasNativePcap) {
+      pcapStatus.textContent = "Native capture ready. Pick an interface and click Start.";
+    } else {
+      pcapStatus.textContent = "Ready to capture. Simulated traffic (native capture unavailable).";
+    }
+  }
+  if (hasNativePcap) {
+    if (pcapInterfaceSelect) {
+      pcapInterfaceSelect.style.display = "block";
+    }
+    if (pcapInterface) {
+      pcapInterface.style.display = "block";
+    }
+    loadPcapInterfaces();
+    // Pre-register capture listeners so packets immediately render
+    ensurePcapListeners();
+  }
+  if (pcapInterfaceSelect) {
+    pcapInterfaceSelect.addEventListener("change", () => {
+      pcapSelectedInterface = pcapInterfaceSelect.value || "auto";
+      if (pcapStatus) {
+      pcapStatus.textContent = `Selected interface: ${getPcapInterfaceLabel(pcapSelectedInterface)}`;
+      }
+    });
+  }
+  if (pcapRefreshBtn) {
+    pcapRefreshBtn.addEventListener("click", () => {
+      loadPcapInterfaces({ quiet: false, force: true });
+    });
+  }
   if (pcapStartBtn) {
     pcapStartBtn.addEventListener("click", startPacketCapture);
   }
@@ -3239,6 +3539,54 @@ window.addEventListener("DOMContentLoaded", () => {
     pcapClearBtn.addEventListener("click", () => {
       stopPacketCapture("", false);
       clearPacketCapture();
+    });
+  }
+  if (pcapSaveBtn) {
+    pcapSaveBtn.addEventListener("click", saveCurrentCapture);
+  }
+  if (pcapExportBtn) {
+    pcapExportBtn.addEventListener("click", () => {
+      const fmt = pcapExportFormat?.value || "pcapng";
+      exportCurrentCapture(fmt);
+    });
+  }
+  if (pcapViewSavedBtn) {
+    pcapViewSavedBtn.addEventListener("click", openPcapSavedModal);
+  }
+  if (pcapSavedCloseBtn) {
+    pcapSavedCloseBtn.addEventListener("click", closePcapSavedModal);
+  }
+  if (pcapSavedDeleteBtn) {
+    pcapSavedDeleteBtn.addEventListener("click", deleteSelectedSavedPcaps);
+  }
+  if (pcapSavedCheckAllBtn) {
+    pcapSavedCheckAllBtn.addEventListener("click", () => toggleAllSavedPcaps(true));
+  }
+  if (pcapSavedUncheckAllBtn) {
+    pcapSavedUncheckAllBtn.addEventListener("click", () => toggleAllSavedPcaps(false));
+  }
+  if (pcapInfoBtn && pcapInfoPanel) {
+    const toggleInfoPanel = () => {
+      const hidden = pcapInfoPanel.hasAttribute("hidden");
+      if (hidden) {
+        pcapInfoPanel.removeAttribute("hidden");
+        pcapInfoBtn.setAttribute("aria-expanded", "true");
+        if (pcapStatus) pcapStatus.textContent = "Npcap install steps shown below.";
+      } else {
+        pcapInfoPanel.setAttribute("hidden", "hidden");
+        pcapInfoBtn.setAttribute("aria-expanded", "false");
+      }
+    };
+    pcapInfoBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleInfoPanel();
+    });
+    pcapInfoBtn.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleInfoPanel();
+      }
     });
   }
   (pcapProtocolFilters || []).forEach((box) => {
@@ -3267,21 +3615,36 @@ window.addEventListener("DOMContentLoaded", () => {
   renderChatMessages();
   setChatStatus("Ready.");
 
-  // Initialize mute TTS button
-  const muteTtsBtn = document.getElementById("muteTtsBtn");
-  if (muteTtsBtn) {
-    muteTtsBtn.addEventListener("click", function () {
-      window.isSpeechMuted = !window.isSpeechMuted;
-      this.classList.toggle("muted", window.isSpeechMuted);
-      if (window.isSpeechMuted) {
-        // Stop any currently playing speech
-        if ("speechSynthesis" in window) {
-          window.speechSynthesis.cancel();
-        }
-      }
+  // Initialize mute and stop TTS controls for deep chat
+  const muteButtons = document.querySelectorAll(".mute-tts-btn");
+  if (muteButtons.length) {
+    setSpeechMuteState(window.isSpeechMuted);
+    muteButtons.forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setSpeechMuteState(!window.isSpeechMuted);
+      });
     });
   }
-});
+  const stopSpeechBtn = document.getElementById("stopSpeechBtn");
+  if (stopSpeechBtn) {
+    stopSpeechBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      stopAllPanelsSpeech();
+    });
+  }
+
+  bindGlobalSpeechControls();
+}
+
+// Bind immediately if DOM is already parsed, otherwise after load
+if (document.readyState === "complete" || document.readyState === "interactive") {
+  initAppDomBindings();
+} else {
+  window.addEventListener("DOMContentLoaded", initAppDomBindings);
+}
 
 const cryptoState = {
   mode: "encrypt",
@@ -3694,6 +4057,10 @@ function renderWifiCharts(networks) {
 async function runWifiScan(options = {}) {
   const updateList = options.updateList !== false;
   const countRun = options.countRun !== false;
+  if (wifiScanInProgress) return;
+  wifiScanInProgress = true;
+  if (wifiScanBtn) wifiScanBtn.disabled = true;
+  if (wifiScanStopBtn) wifiScanStopBtn.disabled = false;
   if (!wifiStatus) return;
   wifiStatus.textContent = "Scanning Wi-Fi networks...";
   if (wifiResult && updateList) {
@@ -3701,15 +4068,60 @@ async function runWifiScan(options = {}) {
   }
   try {
     const invoke = getTauriInvoke();
-    let payload;
+    let payload = null;
+    const withTimeout = (promise) =>
+      Promise.race([
+        promise,
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error("Wi-Fi scan timed out. Check adapter state and try again.")), WIFI_SCAN_TIMEOUT_MS)
+        ),
+      ]);
     if (invoke) {
-      payload = await invoke("wifi_scan");
+      // Primary: native Tauri command (desktop app)
+      payload = await withTimeout(invoke("wifi_scan"));
     } else {
-      wifiStatus.textContent = "Wi-Fi scan is available in the desktop app only.";
-      return;
+      // Fallback: local API (dev / web build)
+      const response = await withTimeout(fetch("/api/wifi-scan", { method: "POST" }));
+      if (!response.ok) {
+        const text = await response.text();
+        if (text.trim().startsWith("<")) {
+          throw new Error(
+            "Wi-Fi scan service is unavailable in this build. Start the Net Kit backend (npm run dev:server) or use the desktop app with Wi-Fi permissions."
+          );
+        }
+        throw new Error(text || "Wi-Fi scan failed (fallback).");
+      }
+      try {
+        payload = await response.json();
+      } catch (parseError) {
+        throw new Error(
+          "Wi-Fi scan response was not valid JSON. If you're running npm run dev:tauri, Wi-Fi scanning only works in the desktop build with Npcap installed."
+        );
+      }
     }
-    const networks = payload.networks || [];
-    const connectedSsid = payload.connectedSsid || payload.connected_ssid || null;
+
+    if (!payload || typeof payload !== "object") {
+      throw new Error("No response from the native Wi-Fi scanner.");
+    }
+
+    // Normalise data shape
+    const networks =
+      payload?.networks || payload?.data?.networks || payload?.result?.networks || [];
+    const connectedSsid =
+      payload?.connectedSsid ||
+      payload?.connected_ssid ||
+      payload?.data?.connectedSsid ||
+      payload?.result?.connectedSsid ||
+      null;
+
+    if (payload?.ok === false) {
+      throw new Error(payload?.error || "Wi-Fi scan failed.");
+    }
+
+    if (!Array.isArray(networks)) {
+      throw new Error(payload?.error || "Unable to parse Wi-Fi scan results.");
+    }
+
     state.toolData.wifiNetworks = networks;
     state.toolData.wifiConnectedSsid = connectedSsid;
     updateWifiHistory(networks);
@@ -3725,10 +4137,20 @@ async function runWifiScan(options = {}) {
       registerRun("Wi-Fi scan completed", "wifi");
     }
   } catch (error) {
-    wifiStatus.textContent = error.message || "Unable to scan Wi-Fi.";
+    console.error("Wi-Fi scan failed:", error);
+    const message =
+      typeof error === "string"
+        ? error
+        : error?.message || JSON.stringify(error) || "Unable to scan Wi-Fi. Ensure Net Kit desktop is running with Wi-Fi permissions.";
+    wifiStatus.textContent = message;
     renderWifiCharts([]);
+  } finally {
+    wifiScanInProgress = false;
+    if (wifiScanBtn) wifiScanBtn.disabled = false;
   }
 }
+
+
 
 async function generateWifiReport() {
   if (!wifiStatus) return;
@@ -3829,17 +4251,23 @@ function stopWifiAutoScan() {
 }
 
 function startWifiAutoScan() {
+  const invoke = getTauriInvoke();
+  const hasFallback = typeof fetch === "function";
+  if (!invoke && !hasFallback) {
+    if (wifiStatus) {
+      wifiStatus.textContent = "Wi-Fi scan is available in the desktop app only.";
+    }
+    return;
+  }
+  // Run a single scan only (no auto-refresh) to avoid continuous refreshes every 5 seconds
   if (wifiScanTimer) {
     clearInterval(wifiScanTimer);
     wifiScanTimer = null;
   }
-  wifiLiveActive = true;
+  wifiLiveActive = false;
   runWifiScan({ updateList: true, countRun: true });
-  wifiScanTimer = setInterval(() => {
-    if (document.hidden) return;
-    runWifiScan({ updateList: false, countRun: false });
-  }, 5000);
 }
+
 
 function handleWifiAutoScan(toolName) {
   if (toolName !== "wifi") return;
@@ -4344,6 +4772,7 @@ if (stegCopyBtn) {
 }
 
 function appendHoneyEvent(message) {
+  if (!honeyActive) return;
   const ts = new Date().toLocaleString();
   honeyEvents.push(`[${ts}] ${message}`);
   if (honeyOutput) {
@@ -4353,20 +4782,79 @@ function appendHoneyEvent(message) {
   saveToolOutput("honey", state.toolData.honey);
 }
 
+function ensureHoneyListeners() {
+  const listen = getTauriEventListen();
+  if (!listen) return;
+  if (!honeyUnlistenEvent) {
+    listen("honey_event", (event) => {
+      const payload = event?.payload;
+      if (payload && typeof payload.message === "string") {
+        appendHoneyEvent(payload.message);
+      } else if (typeof payload === "string") {
+        appendHoneyEvent(payload);
+      }
+    }).then((un) => (honeyUnlistenEvent = un));
+  }
+  if (!honeyUnlistenStatus) {
+    listen("honey_status", (event) => {
+      if (honeyStatus) {
+        const msg = event?.payload || "Honeypot status update.";
+        honeyStatus.textContent = msg;
+        const lower = msg.toLowerCase();
+        if (lower.includes("active")) {
+          honeyActive = true;
+        }
+        if (lower.includes("stopped")) {
+          honeyActive = false;
+        }
+      }
+    }).then((un) => (honeyUnlistenStatus = un));
+  }
+  if (!honeyUnlistenError) {
+    listen("honey_error", (event) => {
+      const msg = event?.payload || "Honeypot error.";
+      appendHoneyEvent(msg);
+      if (honeyStatus) honeyStatus.textContent = msg;
+    }).then((un) => (honeyUnlistenError = un));
+  }
+}
+
 if (honeyStartBtn) {
   honeyStartBtn.addEventListener("click", () => {
     const profile = honeyProfile?.value || "web";
     const port = honeyPort?.value?.trim() || "80";
+    const invoke = getTauriInvoke();
+    if (isDesktopApp() && invoke) {
+      ensureHoneyListeners();
+      honeyStatus.textContent = `Starting honeypot (${profile.toUpperCase()} on port ${port})...`;
+      const portNum = parseInt(port, 10);
+      invoke("honeypot_start", { port: Number.isFinite(portNum) ? portNum : 80, profile })
+        .then(() => {
+          honeyActive = true;
+          honeyStatus.textContent = `Honeypot active (${profile.toUpperCase()} on port ${port})`;
+          registerRun("Honeypot started", "honey");
+        })
+        .catch((error) => {
+          const msg = error?.message || "Failed to start honeypot.";
+          appendHoneyEvent(msg);
+          honeyStatus.textContent = msg;
+        });
+      return;
+    }
+    honeyActive = true;
     honeyStatus.textContent = `Honeypot active (${profile.toUpperCase()} on port ${port}, simulated).`;
-    appendHoneyEvent(`Honeypot started for ${profile.toUpperCase()} on port ${port} (simulated).`);
     registerRun("Honeypot started", "honey");
   });
 }
 
 if (honeyStopBtn) {
   honeyStopBtn.addEventListener("click", () => {
-    honeyStatus.textContent = "Honeypot stopped.";
-    appendHoneyEvent("Honeypot stopped.");
+    const invoke = getTauriInvoke();
+    if (isDesktopApp() && invoke) {
+      invoke("honeypot_stop").catch(() => {});
+    }
+    honeyActive = false;
+    honeyStatus.textContent = "Start honeypot";
   });
 }
 
@@ -4376,6 +4864,7 @@ function randomIp() {
 
 if (honeySimulateBtn) {
   honeySimulateBtn.addEventListener("click", () => {
+    if (!honeyActive) return;
     const profile = honeyProfile?.value || "web";
     const port = honeyPort?.value?.trim() || "80";
     const ip = randomIp();
@@ -4387,11 +4876,11 @@ if (honeySimulateBtn) {
 
 if (honeyClearBtn) {
   honeyClearBtn.addEventListener("click", () => {
-    honeyEvents.length = 0;
-    if (honeyOutput) honeyOutput.value = "";
-    honeyStatus.textContent = "Log cleared.";
-    state.toolData.honey = "";
-    saveToolOutput("honey", state.toolData.honey);
+  honeyEvents.length = 0;
+  if (honeyOutput) honeyOutput.value = "";
+  honeyStatus.textContent = "Log cleared.";
+  state.toolData.honey = "";
+  saveToolOutput("honey", state.toolData.honey);
   });
 }
 
@@ -4778,6 +5267,14 @@ function randomPublicIp() {
   return `${randomInt(20, 223)}.${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(1, 254)}`;
 }
 
+function getPcapInterfaceLabel(iface) {
+  const match = (pcapInterfaces || []).find((d) => d.name === iface);
+  if (match) return match.description || match.name || iface || "auto";
+  if (!iface) return "auto";
+  if (iface.includes("\\NPF_")) return iface.split("\\").pop();
+  return iface;
+}
+
 function randomHostPair() {
   const inside = randomPrivateIp();
   const outside = randomPublicIp();
@@ -4793,6 +5290,221 @@ function getSelectedPcapProtocols() {
   return Array.from(pcapProtocolFilters || [])
     .filter((box) => box.checked)
     .map((box) => box.value);
+}
+
+function ensurePcapListeners() {
+  const listen = getTauriEventListen();
+  if (!listen) return;
+  if (!pcapUnlistenPacket) {
+    listen("pcap_packet", (event) => {
+      const payload = event?.payload?.payload ?? event?.payload;
+      if (payload && typeof payload === "object") {
+        addPcapPacket(payload);
+        if (pcapStatus) {
+          pcapStatus.textContent = `Capturing... ${pcapPackets.length} packets`;
+        }
+      } else if (typeof payload === "string") {
+        try {
+          const parsed = JSON.parse(payload);
+          addPcapPacket(parsed);
+        } catch {
+          if (pcapStatus) {
+            pcapStatus.textContent = `Capture running (payload: ${payload})`;
+          }
+        }
+      }
+      console.log("pcap_packet", payload);
+    }).then((un) => {
+      pcapUnlistenPacket = un;
+    });
+  }
+  if (!pcapUnlistenStatus) {
+    listen("pcap_status", (event) => {
+      const payload = event?.payload?.payload ?? event?.payload;
+      if (pcapStatus) {
+        pcapStatus.textContent = payload || "Capture status update.";
+      }
+      console.log("pcap_status", payload);
+      if (typeof payload === "string" && payload.toLowerCase().includes("stopped")) {
+        pcapActive = false;
+        setPcapActive(false);
+        pcapDurationMs = pcapStartedAt ? Date.now() - pcapStartedAt : 0;
+        pcapStartedAt = 0;
+        renderPcapStats();
+      } else if (typeof payload === "string" && payload.toLowerCase().includes("running")) {
+        setPcapActive(true);
+        if (pcapStatus) {
+          pcapStatus.textContent = payload;
+        }
+      }
+    }).then((un) => {
+      pcapUnlistenStatus = un;
+    });
+  }
+  if (!pcapUnlistenError) {
+    listen("pcap_error", (event) => {
+      const payload = event?.payload?.payload ?? event?.payload;
+      if (pcapStatus) {
+        pcapStatus.textContent = payload || "Capture error.";
+      }
+      console.error("pcap_error", payload);
+      setPcapActive(false);
+    }).then((un) => {
+      pcapUnlistenError = un;
+    });
+  }
+}
+
+async function ensureNpcapReady() {
+  const invoke = getTauriInvoke();
+  if (!invoke || !hasNativePcap) {
+    return { installed: false, message: "Native capture unavailable." };
+  }
+  if (npcapReady) {
+    return { installed: true, message: "Npcap already ready." };
+  }
+  try {
+    if (pcapStatus) {
+      pcapStatus.textContent = "Checking Npcap...";
+    }
+    const status = await invoke("ensure_npcap");
+    if (status?.installed) {
+      npcapReady = true;
+    }
+    if (pcapStatus && status?.message && status.installed) {
+      pcapStatus.textContent = status.message;
+    }
+    return status || { installed: false };
+  } catch (error) {
+    console.warn("ensure_npcap failed", error);
+    const message =
+      error?.message || "Npcap not available. Run as Administrator or install Npcap manually.";
+    if (pcapStatus) {
+      pcapStatus.textContent = message;
+    }
+    return { installed: false, message };
+  }
+}
+
+async function loadPcapInterfaces(options = {}) {
+  const quiet = options?.quiet || false;
+  const invoke = getTauriInvoke();
+  if (!invoke) return [];
+  if (hasNativePcap) {
+    const prep = await ensureNpcapReady();
+    if (!prep?.installed) {
+    if (pcapStatus) {
+      pcapStatus.textContent =
+        prep?.message || "Npcap not available. Run as Administrator or install Npcap, then retry.";
+    }
+      if (pcapInfoPanel) pcapInfoPanel.removeAttribute("hidden");
+      return [];
+    }
+    if (!quiet && pcapStatus) {
+      pcapStatus.textContent = prep?.message || "Npcap ready. Loading interfaces...";
+    }
+  }
+  try {
+    if (!quiet && pcapStatus) {
+      pcapStatus.textContent = "Loading capture interfaces...";
+    }
+    let devices = await invoke("pcap_interfaces");
+    pcapInterfaces = devices || [];
+    const priority = ["realtek", "ethernet", "wifi", "wi-fi", "wireless", "wlan"];
+    devices = (devices || []).sort((a, b) => {
+      const adesc = (a.description || a.name || "").toLowerCase();
+      const bdesc = (b.description || b.name || "").toLowerCase();
+      const aPri = priority.findIndex((k) => adesc.includes(k));
+      const bPri = priority.findIndex((k) => bdesc.includes(k));
+      const aScore = aPri === -1 ? 99 : aPri;
+      const bScore = bPri === -1 ? 99 : bPri;
+      return aScore === bScore ? adesc.localeCompare(bdesc) : aScore - bScore;
+    });
+    const count = devices?.length || 0;
+    console.log("pcap_interfaces loaded:", count, devices);
+    if (pcapStatus) {
+      pcapStatus.textContent =
+        count > 0
+          ? `Native capture ready. ${count} interface(s) detected. Pick one and click Start.`
+          : "No capture interfaces found. Ensure Npcap is installed/running (try Refresh, run as Admin, or run 'tshark -D').";
+    }
+    if (pcapInterfacesList) {
+      pcapInterfacesList.innerHTML = "";
+      devices.forEach((item) => {
+        const name = item?.name || item;
+        const option = document.createElement("option");
+        option.value = name;
+        pcapInterfacesList.appendChild(option);
+      });
+    }
+    if (pcapInterfaceSelect) {
+      pcapInterfaceSelect.innerHTML = "";
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "auto";
+      autoOpt.textContent = "auto (any available interface)";
+      pcapInterfaceSelect.appendChild(autoOpt);
+      devices.forEach((item, idx) => {
+        const opt = document.createElement("option");
+        opt.value = item.name;
+        opt.textContent = item.description || item.name || "Interface";
+        pcapInterfaceSelect.appendChild(opt);
+        if (idx === 0) {
+          pcapInterfaceSelect.value = item.name;
+          pcapSelectedInterface = item.name;
+        }
+      });
+    }
+    if (pcapInterfaceList) {
+      pcapInterfaceList.innerHTML = "";
+      devices.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "pcap-interface-row";
+        row.dataset.iface = item.name;
+        row.innerHTML = `
+          <div class="pcap-iface-name">${item.description || item.name || "Interface"}</div>
+          <div class="pcap-iface-desc">${item.name || ""}</div>
+        `;
+        row.addEventListener("click", () => {
+          pcapSelectedInterface = item.name;
+          if (pcapInterfaceSelect) pcapInterfaceSelect.value = item.name;
+          highlightSelectedInterface();
+          if (pcapStatus) {
+            pcapStatus.textContent = `Selected interface: ${item.name}`;
+          }
+        });
+        row.addEventListener("dblclick", () => {
+          pcapSelectedInterface = item.name;
+          if (pcapInterfaceSelect) pcapInterfaceSelect.value = item.name;
+          highlightSelectedInterface();
+          startPacketCapture();
+        });
+        pcapInterfaceList.appendChild(row);
+      });
+      highlightSelectedInterface();
+      if (!devices.length && pcapInterfaceList) {
+        pcapInterfaceList.style.display = "none";
+        if (pcapInfoPanel) pcapInfoPanel.removeAttribute("hidden");
+      } else if (pcapInterfaceList) {
+        pcapInterfaceList.style.display = "grid";
+      }
+    }
+    return devices;
+  } catch (error) {
+    console.warn("Unable to load pcap interfaces:", error);
+    if (pcapStatus) {
+      pcapStatus.textContent = "Failed to load interfaces. Check Npcap/TShark install (try 'tshark -D').";
+    }
+    return [];
+  }
+}
+
+function highlightSelectedInterface() {
+  if (!pcapInterfaceList) return;
+  const rows = pcapInterfaceList.querySelectorAll(".pcap-interface-row");
+  rows.forEach((row) => {
+    const active = row.dataset.iface === pcapSelectedInterface;
+    row.classList.toggle("active", active);
+  });
 }
 
 function getPcapSummary() {
@@ -4885,6 +5597,410 @@ function renderPcapFeed() {
   });
 }
 
+function getSavedPcaps() {
+  try {
+    const raw = localStorage.getItem(PCAP_SAVES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedPcaps(list) {
+  localStorage.setItem(PCAP_SAVES_KEY, JSON.stringify(list.slice(0, 10)));
+}
+
+function refreshSavedSelect() {
+  // legacy noop (dropdown removed)
+}
+
+function saveCurrentCapture() {
+  if (!pcapPackets || !pcapPackets.length) {
+    if (pcapStatus) pcapStatus.textContent = "No packets to save.";
+    return;
+  }
+  const saved = getSavedPcaps();
+  const ts = new Date().toISOString();
+  const label = `Capture ${new Date().toLocaleString()}`;
+  const snapshot = {
+    id: `pcap-${Date.now()}`,
+    label,
+    packets: pcapPackets.slice(0, PCAP_MAX_PACKETS),
+    savedAt: ts,
+  };
+  saved.unshift(snapshot);
+  if (saved.length > 3) saved.length = 3; // enforce limit
+  persistSavedPcaps(saved);
+  refreshSavedSelect();
+  if (pcapStatus) pcapStatus.textContent = `Saved capture: ${label}`;
+  // Attempt to store in Firestore (best effort)
+  if (db && auth?.currentUser && !isGuestUser()) {
+    const ref = doc(db, "pcapCaptures", auth.currentUser.uid);
+    setDoc(ref, { captures: saved }, { merge: true }).catch((err) =>
+      console.warn("Unable to store capture in Firestore:", err)
+    );
+  }
+}
+
+function loadSavedCapture(id) {
+  if (!id) return;
+  let saved = getSavedPcaps();
+  // Try Firestore if available
+  if (db && auth?.currentUser && !isGuestUser()) {
+    const ref = doc(db, "pcapCaptures", auth.currentUser.uid);
+    getDoc(ref)
+      .then((snap) => {
+        if (snap.exists()) {
+          saved = snap.data()?.captures || saved;
+        }
+        const item = saved.find((entry) => entry.id === id);
+        if (!item) {
+          if (pcapStatus) pcapStatus.textContent = "Saved capture not found.";
+          return;
+        }
+        pcapPackets = Array.isArray(item.packets) ? item.packets.slice() : [];
+        pcapDurationMs = 0;
+        pcapStartedAt = 0;
+        setPcapActive(false);
+        renderPcapFeed();
+        renderPcapStats();
+        if (pcapStatus) {
+          pcapStatus.textContent = `Loaded saved capture: ${item.label || id}`;
+        }
+      })
+      .catch(() => {
+        const fallback = saved.find((entry) => entry.id === id);
+        if (!fallback) {
+          if (pcapStatus) pcapStatus.textContent = "Saved capture not found.";
+          return;
+        }
+        pcapPackets = Array.isArray(fallback.packets) ? fallback.packets.slice() : [];
+        pcapDurationMs = 0;
+        pcapStartedAt = 0;
+        setPcapActive(false);
+        renderPcapFeed();
+        renderPcapStats();
+        if (pcapStatus) {
+          pcapStatus.textContent = `Loaded saved capture: ${fallback.label || id}`;
+        }
+      });
+    return;
+  }
+  const item = saved.find((entry) => entry.id === id);
+  if (!item) {
+    if (pcapStatus) pcapStatus.textContent = "Saved capture not found.";
+    return;
+  }
+  pcapPackets = Array.isArray(item.packets) ? item.packets.slice() : [];
+  pcapDurationMs = 0;
+  pcapStartedAt = 0;
+  setPcapActive(false);
+  renderPcapFeed();
+  renderPcapStats();
+  if (pcapStatus) {
+    pcapStatus.textContent = `Loaded saved capture: ${item.label || id}`;
+  }
+}
+
+function openPcapSavedModal() {
+  if (!pcapSavedModal) return;
+  renderSavedCapturesModal();
+  pcapSavedModal.classList.remove("hidden");
+}
+
+function closePcapSavedModal() {
+  if (!pcapSavedModal) return;
+  pcapSavedModal.classList.add("hidden");
+}
+
+function renderSavedCapturesModal() {
+  if (!pcapSavedList) return;
+  const saved = getSavedPcaps();
+  pcapSavedList.innerHTML = "";
+  if (!saved.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No saved captures.";
+    pcapSavedList.appendChild(empty);
+    return;
+  }
+  saved.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "pcap-saved-row";
+    row.innerHTML = `
+      <input type="checkbox" data-saved-id="${item.id}">
+      <div class="meta">
+        <span class="label">${item.label || item.id}</span>
+        <span>${item.savedAt || ""}</span>
+        <span>${(item.packets || []).length} packets</span>
+      </div>
+      <button class="chip" data-load-saved="${item.id}">Load</button>
+    `;
+    const loadBtn = row.querySelector("[data-load-saved]");
+    if (loadBtn) {
+      loadBtn.addEventListener("click", () => {
+        closePcapSavedModal();
+        loadSavedCapture(item.id);
+      });
+    }
+    pcapSavedList.appendChild(row);
+  });
+}
+
+function getSelectedSavedIds() {
+  if (!pcapSavedList) return [];
+  const boxes = pcapSavedList.querySelectorAll('input[type="checkbox"][data-saved-id]');
+  return Array.from(boxes)
+    .filter((box) => box.checked)
+    .map((box) => box.dataset.savedId);
+}
+
+function toggleAllSavedPcaps(checked) {
+  if (!pcapSavedList) return;
+  const boxes = pcapSavedList.querySelectorAll('input[type="checkbox"][data-saved-id]');
+  boxes.forEach((box) => {
+    box.checked = Boolean(checked);
+  });
+}
+
+function deleteSelectedSavedPcaps() {
+  const ids = getSelectedSavedIds();
+  if (!ids.length) return;
+  let saved = getSavedPcaps();
+  saved = saved.filter((item) => !ids.includes(item.id));
+  persistSavedPcaps(saved);
+  renderSavedCapturesModal();
+  if (pcapStatus) pcapStatus.textContent = `Deleted ${ids.length} saved capture(s).`;
+  if (db && auth?.currentUser && !isGuestUser()) {
+    const ref = doc(db, "pcapCaptures", auth.currentUser.uid);
+    setDoc(ref, { captures: saved }, { merge: true }).catch((err) =>
+      console.warn("Unable to update captures in Firestore:", err)
+    );
+  }
+}
+
+function buildPcapBuffer(packets) {
+  const caplen = 60; // minimal packet size
+  const global = new ArrayBuffer(24);
+  const dv = new DataView(global);
+  dv.setUint32(0, 0xa1b2c3d4, false); // magic
+  dv.setUint16(4, 2, false); // version major
+  dv.setUint16(6, 4, false); // version minor
+  dv.setInt32(8, 0, false); // thiszone
+  dv.setUint32(12, 0, false); // sigfigs
+  dv.setUint32(16, 65535, false); // snaplen
+  dv.setUint32(20, 1, false); // linktype ethernet
+
+  const chunks = [new Uint8Array(global)];
+  const now = Date.now();
+
+  (packets || []).forEach((p, idx) => {
+    const ts = Math.floor((now + idx) / 1000);
+    const usec = ((now + idx) % 1000) * 1000;
+    const rec = new ArrayBuffer(16);
+    const rdv = new DataView(rec);
+    rdv.setUint32(0, ts, false);
+    rdv.setUint32(4, usec, false);
+    rdv.setUint32(8, caplen, false);
+    rdv.setUint32(12, caplen, false);
+    const payload = new Uint8Array(caplen);
+    chunks.push(new Uint8Array(rec));
+    chunks.push(payload);
+  });
+
+  const totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  chunks.forEach((arr) => {
+    out.set(arr, offset);
+    offset += arr.length;
+  });
+  return out.buffer;
+}
+
+function buildPcapngBuffer(packets) {
+  const chunks = [];
+
+  const writeBlock = (type, body) => {
+    const totalLen = 12 + body.length;
+    const padLen = (4 - (totalLen % 4)) % 4;
+    const fullLen = totalLen + padLen;
+    const buf = new ArrayBuffer(fullLen);
+    const dv = new DataView(buf);
+    dv.setUint32(0, type, true);
+    dv.setUint32(4, fullLen, true);
+    new Uint8Array(buf, 8, body.length).set(body);
+    dv.setUint32(fullLen - 4, fullLen, true);
+    return new Uint8Array(buf);
+  };
+
+  // Section Header Block
+  const shbBody = new Uint8Array(16);
+  const shbDv = new DataView(shbBody.buffer);
+  shbDv.setUint32(0, 0x1a2b3c4d, true); // byte-order magic
+  shbDv.setUint16(4, 1, true); // major
+  shbDv.setUint16(6, 0, true); // minor
+  shbDv.setUint64?.(8, 0xffffffffffffffffn, true);
+  if (!shbDv.setUint64) {
+    // fallback for environments without BigInt setters
+    shbDv.setUint32(8, 0xffffffff, true);
+    shbDv.setUint32(12, 0xffffffff, true);
+  }
+  chunks.push(writeBlock(0x0a0d0d0a, shbBody));
+
+  // Interface Description Block
+  const idbBody = new Uint8Array(8);
+  const idbDv = new DataView(idbBody.buffer);
+  idbDv.setUint16(0, 1, true); // linktype ethernet
+  idbDv.setUint16(2, 0, true); // reserved
+  idbDv.setUint32(4, 65535, true); // snaplen
+  chunks.push(writeBlock(1, idbBody));
+
+  // Packets as Enhanced Packet Blocks
+  const now = Date.now();
+  (packets || []).forEach((p, idx) => {
+    const caplen = 60;
+    const epbBody = new Uint8Array(20 + caplen);
+    const epbDv = new DataView(epbBody.buffer);
+    epbDv.setUint32(0, 0, true); // interface id
+    const ts = now + idx;
+    epbDv.setUint32(4, Math.floor(ts / 1000), true); // timestamp high
+    epbDv.setUint32(8, (ts % 1000) * 1000000, true); // timestamp low (ns-ish)
+    epbDv.setUint32(12, caplen, true); // captured len
+    epbDv.setUint32(16, caplen, true); // original len
+    // payload already zeroed
+    chunks.push(writeBlock(6, epbBody));
+  });
+
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  chunks.forEach((c) => {
+    out.set(c, offset);
+    offset += c.length;
+  });
+  return out.buffer;
+}
+function exportCurrentCapture(format = "json") {
+  if (!pcapPackets || !pcapPackets.length) {
+    if (pcapStatus) pcapStatus.textContent = "No packets to export.";
+    return;
+  }
+  if (format === "json") {
+    const blob = new Blob([JSON.stringify(pcapPackets, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `capture-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (pcapStatus) pcapStatus.textContent = "Exported capture as JSON.";
+    return;
+  }
+  if (format === "csv") {
+    const header = ["time", "src", "dest", "protocol", "length", "info"];
+    const rows = pcapPackets.map((p) =>
+      header
+        .map((key) => {
+          const val = p[key] ?? "";
+          const safe = String(val).replace(/\"/g, '""');
+          return `"${safe}"`;
+        })
+        .join(",")
+    );
+    const csv = [header.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `capture-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (pcapStatus) pcapStatus.textContent = "Exported capture as CSV.";
+    return;
+  }
+  if (format === "pcap" || format === "pcapng") {
+    const buffer = format === "pcapng" ? buildPcapngBuffer(pcapPackets) : buildPcapBuffer(pcapPackets);
+    const blob = new Blob([buffer], {
+      type: format === "pcapng" ? "application/octet-stream" : "application/vnd.tcpdump.pcap",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `capture-${Date.now()}.${format}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (pcapStatus) pcapStatus.textContent = `Exported capture as ${format}.`;
+    return;
+  }
+}
+
+// Expose lightweight debug helpers for DevTools
+if (typeof window !== "undefined") {
+  window._pcapDebug = {
+    get packets() {
+      return pcapPackets;
+    },
+    renderFeed: () => renderPcapFeed(),
+    renderStats: () => renderPcapStats(),
+    start: (iface, protocols = ["TCP", "UDP", "ICMP"], bpf = null) =>
+      startPacketCaptureWith(iface, protocols, bpf),
+    stop: () => {
+      stopPacketCapture("Stopped via _pcapDebug.stop()", false);
+    },
+    saves: () => getSavedPcaps(),
+    loadSave: (id) => loadSavedCapture(id),
+  };
+}
+
+// Direct invoke helper to start capture (used by _pcapDebug.start)
+async function startPacketCaptureWith(iface, protocols = ["TCP", "UDP", "ICMP"], bpfFilter = null) {
+  const invoke = getTauriInvoke();
+  if (!invoke || !hasNativePcap) {
+    if (pcapStatus) pcapStatus.textContent = "Native capture unavailable.";
+    return;
+  }
+  const npcapStatus = await ensureNpcapReady();
+  if (!npcapStatus?.installed) {
+    if (pcapStatus) {
+      pcapStatus.textContent =
+        npcapStatus?.message ||
+        "Npcap not available. Install it (requires Administrator) and restart capture.";
+    }
+    return;
+  }
+  ensurePcapListeners();
+  pcapSelectedInterface = iface || "auto";
+  pcapPackets = [];
+  renderPcapFeed();
+  renderPcapStats();
+  setPcapActive(true);
+  pcapStartedAt = Date.now();
+  pcapDurationMs = 0;
+  if (pcapStatus) {
+    const label = getPcapInterfaceLabel(pcapSelectedInterface);
+    pcapStatus.textContent = `Starting capture on ${label} (${protocols.join(", ")})...`;
+  }
+  try {
+    await invoke("pcap_start", {
+      interface: iface && iface !== "auto" ? iface : null,
+      protocols,
+      bpfFilter: bpfFilter || null,
+    });
+    if (pcapStatus) {
+      const label = getPcapInterfaceLabel(pcapSelectedInterface);
+      pcapStatus.textContent = `Capturing on ${label} (${protocols.join(", ")})...`;
+    }
+  } catch (error) {
+    console.error("pcap_start (debug) failed:", error);
+    setPcapActive(false);
+    if (pcapStatus) {
+      pcapStatus.textContent = error?.message || "Failed to start capture.";
+    }
+  }
+}
+
 function setChatStatus(message) {
   if (chatStatus) {
     chatStatus.textContent = message;
@@ -4893,13 +6009,26 @@ function setChatStatus(message) {
 
 function renderChatHandle() {
   if (!chatHandleDisplay) return;
+  if (isGuestUser()) {
+    chatHandleDisplay.textContent = "Guest mode (chat disabled)";
+    setChatStatus("Create an account to use chat and collaboration features.");
+    const guestNotice = document.getElementById("guestNotice");
+    if (guestNotice) guestNotice.classList.remove("hidden");
+    return;
+  }
+  const guestNotice = document.getElementById("guestNotice");
+  if (guestNotice) guestNotice.classList.add("hidden");
   if (state.userHandle?.handle) {
     chatHandleDisplay.textContent = state.userHandle.handle;
+    const badge = document.getElementById("userHandleBadge");
+    if (badge) badge.textContent = `Handle: ${state.userHandle.handle}`;
     if (chatStatus && (!chatStatus.textContent || chatStatus.textContent === "Ready.")) {
       chatStatus.textContent = `Your handle: ${state.userHandle.handle}. Share it to invite friends.`;
     }
   } else {
     chatHandleDisplay.textContent = "Handle not ready";
+    const badge = document.getElementById("userHandleBadge");
+    if (badge) badge.textContent = "";
   }
 }
 
@@ -4914,7 +6043,10 @@ function buildBaseUsername() {
 }
 
 async function ensureUserHandle() {
-  if (!auth.currentUser) return null;
+  if (!auth.currentUser || isGuestUser()) {
+    setChatStatus("Create an account to use chat handles and messaging.");
+    return null;
+  }
   if (state.userHandle?.uid === auth.currentUser.uid && state.userHandle?.handle) {
     return state.userHandle;
   }
@@ -4948,36 +6080,52 @@ async function ensureUserHandle() {
     console.warn("Unable to load user handle", error);
   }
   const base = buildBaseUsername();
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  const tryReserveHandle = async (candidate) => {
+    const handleLower = candidate.toLowerCase();
+    const clash = await getDocs(
+      query(collection(db, "userHandles"), where("handleLower", "==", handleLower))
+    );
+    if (clash.size) return null;
+    const payload = {
+      uid: auth.currentUser.uid,
+      username: base,
+      usernameLower: base.toLowerCase(),
+      code: candidate.split("#")[1] || "",
+      handle: candidate,
+      handleLower,
+      email: auth.currentUser.email || "",
+      emailLower: (auth.currentUser.email || "").toLowerCase(),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+    await setDoc(ref, payload, { merge: true });
+    state.userHandle = payload;
+    renderChatHandle();
+    return state.userHandle;
+  };
+
+  // Try random 4-digit discriminator first
+  for (let attempt = 0; attempt < 20; attempt += 1) {
     const code = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
     const handle = `${base}#${code}`;
-    const handleLower = handle.toLowerCase();
     try {
-      const clash = await getDocs(
-        query(collection(db, "userHandles"), where("handleLower", "==", handleLower))
-      );
-      if (!clash.size) {
-        const payload = {
-          uid: auth.currentUser.uid,
-          username: base,
-          usernameLower: base.toLowerCase(),
-          code,
-          handle,
-          handleLower,
-          email: auth.currentUser.email || "",
-          emailLower: (auth.currentUser.email || "").toLowerCase(),
-          createdAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
-        };
-        await setDoc(ref, payload, { merge: true });
-        state.userHandle = payload;
-        renderChatHandle();
-        return state.userHandle;
-      }
+      const reserved = await tryReserveHandle(handle);
+      if (reserved) return reserved;
     } catch (error) {
       console.warn("Handle generation attempt failed", error);
     }
   }
+
+  // Fallback: UID-based discriminator to guarantee uniqueness
+  const uidTail = (auth.currentUser.uid || "").slice(-6) || String(Date.now());
+  const fallbackHandle = `${base}#${uidTail}`;
+  try {
+    const reserved = await tryReserveHandle(fallbackHandle);
+    if (reserved) return reserved;
+  } catch (error) {
+    console.warn("Handle fallback generation failed", error);
+  }
+
   setChatStatus("Unable to generate a unique handle. Try again shortly.");
   return null;
 }
@@ -4994,6 +6142,10 @@ function parseChatHandle(input) {
 }
 
 async function findUserByHandle(handleLower) {
+  if (isGuestUser()) {
+    setChatStatus("Create an account to search and invite other users.");
+    return null;
+  }
   if (!handleLower) return null;
   try {
     const snap = await getDocs(
@@ -5137,6 +6289,10 @@ function stopChatListeners() {
 }
 
 function subscribeToChatInvites() {
+  if (isGuestUser()) {
+    setChatStatus("Sign up to receive chat invites.");
+    return;
+  }
   if (chatInvitesUnsub) {
     chatInvitesUnsub();
     chatInvitesUnsub = null;
@@ -5174,6 +6330,10 @@ function subscribeToChatInvites() {
 }
 
 function subscribeToChatMessages(chatId) {
+  if (isGuestUser()) {
+    setChatStatus("Sign up to view chat messages.");
+    return;
+  }
   if (!chatId) return;
   if (chatMessagesUnsub) {
     chatMessagesUnsub();
@@ -5209,7 +6369,10 @@ function subscribeToChatMessages(chatId) {
 }
 
 async function ensureChatDoc(invite, targetEmail) {
-  if (!auth.currentUser) return null;
+  if (!auth.currentUser || isGuestUser()) {
+    setChatStatus("Create an account to start chats.");
+    return null;
+  }
   const chatId = invite?.chatId || invite?.id || `chat-${Date.now()}`;
   const selfHandle = state.userHandle?.handle || auth.currentUser.email;
   const selfHandleLower =
@@ -5248,6 +6411,10 @@ async function ensureChatDoc(invite, targetEmail) {
 }
 
 async function loadExistingChats() {
+  if (isGuestUser()) {
+    setChatStatus("Create an account to sync chats.");
+    return;
+  }
   if (chatRoomsUnsub) {
     chatRoomsUnsub();
     chatRoomsUnsub = null;
@@ -5327,7 +6494,10 @@ async function loadExistingChats() {
 }
 
 async function handleInviteAction(inviteId, action) {
-  if (!inviteId || !auth.currentUser) return;
+  if (!inviteId || !auth.currentUser || isGuestUser()) {
+    setChatStatus("Create an account to manage invites.");
+    return;
+  }
   const invite = state.chat.invites.find((item) => item.id === inviteId);
   if (!invite) return;
   if (action === "accept") {
@@ -5350,7 +6520,7 @@ async function handleInviteAction(inviteId, action) {
 }
 
 async function sendChatInvite() {
-  if (!auth.currentUser || !chatInviteEmail) {
+  if (!auth.currentUser || !chatInviteEmail || !requireFullAccount("send chat invites")) {
     setChatStatus("Sign in to invite.");
     return;
   }
@@ -5399,7 +6569,7 @@ async function sendChatInvite() {
 }
 
 async function sendChatMessage() {
-  if (!auth.currentUser) {
+  if (!auth.currentUser || !requireFullAccount("chat with others")) {
     setChatStatus("Sign in to chat.");
     return;
   }
@@ -5468,6 +6638,10 @@ function addPcapPacket(packet) {
   }
   renderPcapFeed();
   renderPcapStats();
+  setPcapActive(true);
+  if (pcapStatus) {
+    pcapStatus.textContent = `Capturing... ${pcapPackets.length} packets`;
+  }
 }
 
 function setPcapActive(active) {
@@ -5477,15 +6651,18 @@ function setPcapActive(active) {
 }
 
 function stopPacketCapture(message = "Capture stopped.", recordRun = true) {
+  const invoke = getTauriInvoke();
+  if (hasNativePcap && invoke) {
+    invoke("pcap_stop").catch((err) => {
+      console.warn("pcap_stop failed:", err);
+      if (pcapStatus) {
+        pcapStatus.textContent = err?.message || "Failed to stop capture.";
+      }
+    });
+  }
   if (pcapTimer) {
     clearInterval(pcapTimer);
     pcapTimer = null;
-  }
-  if (!pcapActive) {
-    if (pcapStatus && message) {
-      pcapStatus.textContent = message;
-    }
-    return;
   }
   pcapDurationMs = pcapStartedAt ? Date.now() - pcapStartedAt : 0;
   pcapStartedAt = 0;
@@ -5500,21 +6677,86 @@ function stopPacketCapture(message = "Capture stopped.", recordRun = true) {
   }
 }
 
-function startPacketCapture() {
+async function startPacketCapture() {
   if (!pcapStatus) return;
+  console.log("pcap_start click");
+  if (hasNativePcap) {
+    const npcapStatus = await ensureNpcapReady();
+    if (!npcapStatus?.installed) {
+      pcapStatus.textContent =
+        npcapStatus?.message ||
+        "Npcap not available. Run the installer (requires Administrator) and restart capture.";
+      return;
+    }
+  }
+  // If no interfaces loaded yet, refresh once
+  if ((pcapInterfaceSelect?.options?.length || 0) <= 1 && hasNativePcap) {
+    pcapStatus.textContent = "Refreshing interfaces...";
+    await loadPcapInterfaces({ quiet: false, force: true });
+    if ((pcapInterfaceSelect?.options?.length || 0) <= 1) {
+      pcapStatus.textContent =
+        "No interfaces detected. Run app as Administrator and ensure Npcap/TShark are installed.";
+      return;
+    }
+  }
   const protocols = getSelectedPcapProtocols();
   if (!protocols.length) {
     pcapStatus.textContent = "Select at least one protocol to watch.";
     return;
   }
-  const iface = (pcapInterface?.value || "auto").trim() || "auto";
+  const manualIface = (pcapInterface?.value || "").trim();
+  const rawIface =
+    (manualIface || pcapSelectedInterface || pcapInterfaceSelect?.value || "auto").trim() || "auto";
+  if ((pcapInterfaceSelect?.options?.length || 0) <= 1 && rawIface === "auto") {
+    pcapStatus.textContent =
+      "No interfaces detected yet. Click in the dropdown, or refresh interfaces, or run 'tshark -D' to verify visibility.";
+    return;
+  }
+  // Normalize doubled backslashes users may paste
+  const iface = rawIface.replace(/^\\\\+/, "\\");
+  if (pcapStatus) {
+    const label = getPcapInterfaceLabel(iface);
+    pcapStatus.textContent = `Starting capture on ${label} (${protocols.join(", ")})...`;
+  }
   pcapPackets = [];
   renderPcapFeed();
   renderPcapStats();
+  pcapActiveInterface = iface;
+  const invoke = getTauriInvoke();
+  const desktop = hasNativePcap;
+  if (desktop && invoke) {
+    console.log("pcap_start invoked with", iface, protocols);
+    ensurePcapListeners();
+    setPcapActive(true);
+    pcapStartedAt = Date.now();
+    pcapDurationMs = 0;
+    invoke("pcap_start", {
+      interface: iface === "auto" ? null : iface,
+      protocols,
+      bpfFilter: (pcapFilterInput?.value || "").trim() || null,
+    })
+      .then(() => {
+        const label = getPcapInterfaceLabel(iface);
+        pcapStatus.textContent = `Capturing on ${label} (${protocols.join(", ")})...`;
+        // Safety: if no status event arrives, keep UI in "capturing" state
+        setPcapActive(true);
+      })
+      .catch((error) => {
+        console.error("pcap_start failed:", error);
+        setPcapActive(false);
+        pcapStatus.textContent = error?.message || "Failed to start capture.";
+      });
+    return;
+  }
+
+  // Fallback simulation for non-desktop environments
   setPcapActive(true);
   pcapStartedAt = Date.now();
   pcapDurationMs = 0;
-  pcapStatus.textContent = `Capturing on ${iface} (${protocols.join(", ")}) - simulated preview`;
+  if (pcapStatus) {
+    const label = getPcapInterfaceLabel(iface);
+    pcapStatus.textContent = `Capturing on ${label} (${protocols.join(", ")}) - simulated preview`;
+  }
   if (pcapTimer) {
     clearInterval(pcapTimer);
   }
@@ -5727,7 +6969,7 @@ function registerPortScanListeners() {
     }
     const target = (portScanLastTarget || "").toLowerCase();
     const isLocalTarget = isLikelyLocalTarget(target);
-    if (isLocalTarget && typeof appendHoneyEvent === "function") {
+    if (honeyActive && isLocalTarget && typeof appendHoneyEvent === "function") {
       appendHoneyEvent(`Port scan hit on local port ${port} (target ${target || "localhost"})`);
       if (honeyStatus) honeyStatus.textContent = "Recorded probe from port scan.";
     }
@@ -6288,7 +7530,7 @@ if (reportSaveLocalBtn) {
       alert("Generate a report before saving.");
       return;
     }
-    const title = document.getElementById("reportTitle").value.trim() || "Cyber Kit Report";
+    const title = document.getElementById("reportTitle").value.trim() || "Net Kit Report";
     const sessionId = reportSessionSelect?.value || state.currentSessionId || null;
     const localReports = loadLocalReports();
     localReports.unshift({
@@ -6311,7 +7553,7 @@ function exportReportToPdf(content) {
     alert("Generate a report before exporting.");
     return;
   }
-  const title = document.getElementById("reportTitle").value.trim() || "Cyber Kit Report";
+  const title = document.getElementById("reportTitle").value.trim() || "Net Kit Report";
   const reportWindow = window.open("", "reportPdf");
   if (!reportWindow) {
     alert("Popup blocked. Allow popups to export PDF.");

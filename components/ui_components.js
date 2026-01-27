@@ -153,7 +153,7 @@ export function createFooterControls(config = {}) {
   spacer.className = "footer-spacer";
   footer.appendChild(spacer);
 
-  // Stop Speaking button
+  // Stop Speaking button (optional)
   if (showStopSpeech) {
     const stopBtn = document.createElement("button");
     stopBtn.type = "button";

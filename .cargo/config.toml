@@ -1,0 +1,10 @@
+[env]
+PCAP_LIBDIR = "D:/websites/inprogress/z-tools/net-kit/npcap-sdk-1.16/Lib/x64"
+PCAP_INCLUDE = "D:/websites/inprogress/z-tools/net-kit/npcap-sdk-1.16/Include"
+PCAP_INCLUDEDIR = "D:/websites/inprogress/z-tools/net-kit/npcap-sdk-1.16/Include"
+PCAP_DIR = "D:/websites/inprogress/z-tools/net-kit/npcap-sdk-1.16"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+  "-L", "D:/websites/inprogress/z-tools/net-kit/npcap-sdk-1.16/Lib/x64",
+]

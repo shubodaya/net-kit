@@ -8,8 +8,8 @@
   <!-- Inner accent border -->
   <rect x="40" y="40" width="176" height="176" rx="32" fill="none" stroke="#2cff67" stroke-width="2" opacity="0.6"/>
   
-  <!-- Text: CK -->
-  <text x="128" y="160" text-anchor="middle" font-size="96" font-family="'Courier New', 'Consolas', monospace" font-weight="bold" fill="#2cff67" letter-spacing="8">CK</text>
+  <!-- Text: NK -->
+  <text x="128" y="160" text-anchor="middle" font-size="96" font-family="'Courier New', 'Consolas', monospace" font-weight="bold" fill="#2cff67" letter-spacing="8">NK</text>
   
   <!-- Subtle glow effect -->
   <defs>

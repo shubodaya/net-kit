@@ -118,7 +118,7 @@ coverage/
 *.pfx
 *.cert
 *.crt
-.env.signing
+.env.signing`n# Firebase configs (secret/local)`nfirebase.config.json`nfirebase.config.runtime.json`nsrc-tauri/firebase.config.json`nsrc-tauri/firebase.config.runtime.json
 *.swo
 *~
 .DS_Store

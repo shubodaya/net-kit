@@ -1,7 +1,7 @@
 import { applyCorrections, normalizeInput, hasKeyword } from "./bot_utils.js";
 
 const responses = {
-  greeting: "Hi! Tell me which Cyber Kit tool you want help with.",
+  greeting: "Hi! Tell me which Net Kit tool you want help with.",
   password: "Use Password checker: type a password to see strength hints and the meter.",
   subnet: "Use IP subnet calculator: enter CIDR like 192.168.1.10/24 and click Calculate.",
   log: "Use Log analyser: paste logs and click Analyze to see errors and IPs.",

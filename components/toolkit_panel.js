@@ -13,6 +13,26 @@ import {
   createToolDetailsCard,
 } from "./ui_components.js";
 
+function showToolKitInfo(selection) {
+  const title = selection.label || "Tool info";
+  const desc = selection.info || "No description provided.";
+  const example = selection.example || "NA";
+  // Add a blank line before the example content and after it for clarity
+  const message = `Description:\n${desc}\n\nExample:\n\n${example}\n`;
+  const openPromptFn = window?.openPrompt;
+  if (typeof openPromptFn === "function") {
+    openPromptFn({
+      title,
+      message,
+      confirmText: "OK",
+      cancelText: "Close",
+      requireInput: false,
+    });
+  } else {
+    alert(message);
+  }
+}
+
 // State machine for Tool Kit panel
 const toolKitState = {
   screen: "intro", // intro | options | details | exploring
@@ -45,7 +65,7 @@ export function renderToolKitIntro(container) {
   const intro = createPromptPanel(
     "🛠️ Tool Kit",
     "Cipher here. Welcome to the Tool Kit.",
-    "I can help you understand and use any of the tools in Cyber Kit. Pick a category below to explore."
+    "I can help you understand and use any of the tools in Net Kit. Pick a category below to explore."
   );
 
   container.appendChild(intro);
@@ -60,7 +80,9 @@ export function renderToolKitIntro(container) {
   `;
 
   renderOptionsPanel(optionsDiv, "toolkit", (selection) => {
-    // When an option is selected, prefill input and auto-execute
+    // Show brief info about the tool
+    showToolKitInfo(selection);
+    // Prefill input for further actions
     speakToolKitMessage(`You selected ${selection.label}. Using template: ${selection.template}`);
 
     // Get the deep chat input
@@ -150,6 +172,8 @@ export function renderToolKit(container) {
 let toolKitSpeechUtterance = null;
 
 export function speakToolKitMessage(text) {
+  const ENABLE_TOOLKIT_TTS = false;
+  if (!ENABLE_TOOLKIT_TTS) return;
   if (!text || !("speechSynthesis" in window)) return;
 
   // Check global mute flag

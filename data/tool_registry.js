@@ -1,5 +1,5 @@
 /**
- * Tool Registry - Central registry for all available tools in Cyber Kit
+ * Tool Registry - Central registry for all available tools in Net Kit
  * Each tool has comprehensive metadata for guided discovery and help
  */
 
@@ -12,7 +12,7 @@ export const deepChatToolContexts = {
   toolkit: {
     id: "toolkit",
     name: "Tool Kit",
-    summary: `Interactive guide for discovering and using all security tools in Cyber Kit. Browse tools by category, view detailed descriptions, try tools instantly.`,
+    summary: `Interactive guide for discovering and using all security tools in Net Kit. Browse tools by category, view detailed descriptions, try tools instantly.`,
     expectedInputs: "Tool selection from categories (Security, Networking, Analysis, Intelligence, Output, Organization)",
     outputFormat: "Tool interface with real-time analysis, recommendations, and results",
     examplePrompts: [
@@ -260,7 +260,7 @@ export const toolRegistry = {
     outputs: "PDF file with formatted results, timestamps, and analysis summaries",
     example: {
       input: "General session (5 events, 3 tool outputs)",
-      output: "cyber-kit-report-2024-01-24.pdf (12 pages)",
+      output: "net-kit-report-2024-01-24.pdf (12 pages)",
     },
     commonErrors: [
       "No sessions available - run some tools first",
