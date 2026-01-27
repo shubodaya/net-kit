@@ -4,6 +4,10 @@ Net Kit is a Windows-first Tauri desktop app that bundles common blue-team tools
 
 [![Net Kit Thumbnail](https://github.com/shubodaya/net-kit/blob/master/net-thumbnail.png)](https://youtu.be/ZeOYa8j2g3k)
 
+## 🎥 Demo Video
+
+[Watch the Net Kit demo on YouTube](https://youtu.be/ZeOYa8j2g3k)
+
 ## What you can do (quick tour)
 - **Cipher assistant & Deep Chat**: Onboarding steps, speech playback, mute/stop, and guided flows for each tool. Deep Chat hosts multiple bots (Tool Kit, Command Assist, Incident Triage, Threat Intel, Phishing Analyzer, Compliance Helper).
 - **Packet capture**: Live capture via Npcap with interface picker, protocol filters, BPF filter box, start/stop/clear, save list, export as PCAP/PCAPNG, and view/delete saved captures.
