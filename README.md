@@ -1,4 +1,4 @@
-﻿# Net Kit (Desktop)
+# Net Kit (Desktop)
 
 Net Kit is a Windows-first Tauri desktop app that bundles common blue-team tools with a guided assistant (Cipher). It runs fully locally except for optional Firebase auth/storage, and supports speech, templates, and quick exports.
 
@@ -60,7 +60,7 @@ npm run dev
 - **Packet capture**: Pick an interface (Realtek/Ethernet/Wi-Fi sorted to the top), choose protocols or BPF, click Start/Stop. Saved captures appear in the Saved modal where you can check/uncheck and delete. Export via dropdown to PCAP or PCAPNG.
 - **Wi-Fi**: Scan, view channels/security, export summary (no auto-refresh).
 - **Tool Kit utilities**: URL check, hash, subnet, password, crypto/stego, WHOIS, report builder, etc. Use "Save" to store outputs to the current session.
-- **Command Assist**: Pick vendor → model/device → command family to auto-suggest commands.
+- **Command Assist**: Pick vendor ? model/device ? command family to auto-suggest commands.
 - **Incident Triage**: Templates for Initial Assessment, Containment, Stakeholder Notifications, Artifact Collection, Threat Actor Profile, IOC Extraction, Eradication Plan, and System Hardening. Notes can be saved/loaded locally.
 - **Threat Intel**: Templates for zero-days, campaigns, IP/domain/hash reputation, MITRE mapping, and TTP analysis.
 - **Phishing Analyzer**: Header/link/attachment analysis, classification, response playbook, and user-education flags.
@@ -86,9 +86,9 @@ npm run dev
   - macOS: `tauri-macos-latest`
 - Add a GitHub Release later to auto-attach these artifacts if desired.
 
-## Download & try
-- Local build: run the NSIS installer from `src-tauri/target/release/bundle/nsis/Net Kit_*_x64-setup.exe` (name depends on version).
-- CI build: grab artifacts from the latest tagged GitHub Actions run.
+## Legal & required dependencies
+- **Npcap** is required for packet capture. License forbids bundling/redistribution without an OEM license. Users must download/install it themselves from https://nmap.org/npcap/ (or via Wireshark/Nmap). Net Kit does not ship Npcap.
+- Without Npcap, other tools still work; packet capture will be unavailable.
 
 ## Troubleshooting
 - Packet capture shows no interfaces: run as Administrator, confirm Npcap installed, click Refresh Interfaces, or run `tshark -D` to verify visibility.
@@ -103,7 +103,8 @@ npm run dev
 ## Contribute
 - Open issues and PRs at https://github.com/shubodaya/net-kit.
 - Good first contributions: new tool templates, command packs, UX tweaks for capture/scan, and documentation improvements.
-- Keep PRs small; include a brief test note (even “manual QA: npm run dev:tauri”).
+- Keep PRs small; include a brief test note (even �manual QA: npm run dev:tauri�).
 
 ---
-Net Kit is open source—download, test, suggest improvements, and help expand the tool set.
+Net Kit is open source�download, test, suggest improvements, and help expand the tool set.
+
