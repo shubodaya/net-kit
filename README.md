@@ -38,21 +38,40 @@ Net Kit is a Windows-first Tauri desktop app that bundles common blue-team tools
 - Wireshark (optional) to open exported PCAP/PCAPNG files.
 
 ## Setup
+
 1) Install dependencies
 ```bash
 npm install
 ```
 
-2) Create your env file
-```bash
-copy .env.example .env
-# fill in Firebase and API keys as needed; keep .env out of git
-```
+2) Install capture driver (desktop only)
+- Install Npcap from https://nmap.org/npcap/ (required for packet capture). Net Kit does not bundle Npcap due to licensing.
 
-3) (Recommended) prepare desktop assets
+3) Provide your own backend config
+- Create your env file:
+  ```bash
+  copy .env.example .env
+  ```
+- Fill in Firebase (or your own backend) keys in `.env` and ensure `firebase.config.json` is present at runtime (the app will read it locally or from Tauri on desktop). Without a backend, guest mode works but cloud features/login will not.
+
+4) (Recommended) prepare desktop assets
 ```bash
 npm run prepare:desktop
 ```
+
+5) Run
+- Desktop dev (Tauri window):
+  ```bash
+  npm run dev:tauri
+  ```
+- Build release (Windows NSIS):
+  ```bash
+  npm run build:tauri:win
+  ```
+- Web/static preview (browser-safe tools only):
+  ```bash
+  npx serve .
+  ```
 
 ## Running
 - Desktop dev (Tauri window):
@@ -121,4 +140,5 @@ npm run dev
 
 ---
 Net Kit is open source—download, test, suggest improvements, and help expand the tool set.
+
 
