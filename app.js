@@ -71,14 +71,24 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const invoke = getTauriInvoke();
-if (!invoke) {
-  throw new Error("Tauri invoke is unavailable. Run this inside the Tauri desktop app.");
+let firebaseConfig = null;
+if (invoke) {
+  try {
+    firebaseConfig = await invoke("firebase_config");
+    console.log("firebaseConfig from Rust:", firebaseConfig);
+  } catch (err) {
+    console.warn("invoke(firebase_config) failed, falling back to local config", err);
+  }
 }
-
-const firebaseConfig = await invoke("firebase_config");
-console.log("firebaseConfig from Rust:", firebaseConfig);
-
-const app = initializeApp(firebaseConfig);
+if (!firebaseConfig) {
+  try {
+    firebaseConfig = await fetch("firebase.config.json").then((r) => r.json());
+    console.log("firebaseConfig from local file:", firebaseConfig);
+  } catch (err) {
+    console.warn("firebase.config.json not available; using empty config", err);
+    firebaseConfig = {};
+  }
+}const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
@@ -7675,6 +7685,8 @@ if (sessionList) {
     if (!session) return;
     if (action === "use") {
       state.currentSessionId = sessionId;
+      applyActiveSessionToTools(sessionId);
+      saveUserSessions();
       updateSessionOptions();
       renderSessionList();
       return;
@@ -8085,3 +8097,4 @@ function softwareDesDecrypt(dataBytes, keyBytes, ivBytes, triple = false) {
   }
   return pkcs7Unpad(result);
 }
+
