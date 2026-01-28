@@ -1,4 +1,12 @@
 # Net Kit (Desktop)
+![Status](https://img.shields.io/badge/status-active-2ea44f)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
+![Built%20With](https://img.shields.io/badge/built%20with-Tauri-24c8db)
+![Frontend](https://img.shields.io/badge/frontend-React-61dafb)
+![Language](https://img.shields.io/badge/language-TypeScript-3178c6)
+![Security](https://img.shields.io/badge/focus-Blue%20Team-purple)
+![License](https://img.shields.io/badge/license-MIT-black)
+
 
 Net Kit is a Windows-first Tauri desktop app that bundles common blue-team tools with a guided assistant (Cipher). It runs fully locally except for optional Firebase auth/storage, and supports speech, templates, and quick exports.
 
