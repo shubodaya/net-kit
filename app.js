@@ -885,9 +885,21 @@ function setLoginMessage(message) {
 }
 
 function clearLoginMessage() {
-  if (!loginMessage) return;
-  loginMessage.textContent = "";
-  loginMessage.classList.add("hidden");
+    if (!loginMessage) return;
+    loginMessage.textContent = "";
+    loginMessage.classList.add("hidden");
+}
+
+function resetAuthForms() {
+  if (typeof forms !== "undefined") {
+    if (forms.login && typeof forms.login.reset === "function") {
+      forms.login.reset();
+    }
+    if (forms.signup && typeof forms.signup.reset === "function") {
+      forms.signup.reset();
+    }
+  }
+  clearLoginMessage();
 }
 
 function setProfileInitials(name) {
@@ -2457,6 +2469,7 @@ if (profileLogoutBtn) {
     if (isGuestUser()) {
       state.isGuest = false;
       setCurrentUser(null);
+      resetAuthForms();
       closeProfileDropdown();
       showAuth();
       return;
@@ -2464,6 +2477,8 @@ if (profileLogoutBtn) {
     try {
       pendingLogoutMessage = "";
       await signOut(auth);
+      resetAuthForms();
+      closeProfileDropdown();
     } catch (error) {
       alert(error.message || "Unable to sign out.");
     }
@@ -3036,12 +3051,14 @@ if (logoutBtn) {
     if (isGuestUser()) {
       state.isGuest = false;
       setCurrentUser(null);
+      resetAuthForms();
       showAuth();
       return;
     }
     try {
       pendingLogoutMessage = "";
       await signOut(auth);
+      resetAuthForms();
     } catch (error) {
       alert(error.message || "Unable to sign out.");
     }
